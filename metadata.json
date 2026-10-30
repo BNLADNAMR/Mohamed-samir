@@ -1,0 +1,8 @@
+{
+  "name": "نظام متابعة الشفتات وأداء المندوبين",
+  "description": "نظام احترافي لإدارة الحضور اليومي ومتابعة جدولة الشفتات ومؤشرات الأداء الشهرية للمندوبين",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

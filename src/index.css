@@ -1,0 +1,103 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: 'Tajawal', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer base {
+  body {
+    font-family: var(--font-sans);
+    background-color: #f8fafc;
+    color: #0f172a;
+  }
+
+  .dark body {
+    background-color: #020617;
+    color: #f1f5f9;
+  }
+}
+
+/* تثبيت الأعمدة في الجدول بتوافق RTL ودعم الطباعة */
+.sticky-col-first {
+  position: sticky;
+  right: 0;
+  z-index: 20;
+}
+
+.sticky-col-second {
+  position: sticky;
+  right: 72px;
+  z-index: 20;
+}
+
+.sticky-col-third {
+  position: sticky;
+  right: 248px;
+  z-index: 20;
+}
+
+.sticky-col-last {
+  position: sticky;
+  left: 0;
+  z-index: 20;
+}
+
+thead .sticky-col-first,
+thead .sticky-col-second,
+thead .sticky-col-third,
+thead .sticky-col-last {
+  z-index: 30;
+}
+
+/* شريط التمرير المخصص مع دعم الوضع الداكن */
+::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+.dark ::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* إعدادات الطباعة لبيئة iFrame */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  .sticky-col-first,
+  .sticky-col-second,
+  .sticky-col-third,
+  .sticky-col-last {
+    position: static !important;
+  }
+  body,
+  .dark body {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+  }
+}

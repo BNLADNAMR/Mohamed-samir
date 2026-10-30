@@ -1,0 +1,1100 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>نظام متابعة الشفتات وأداء المندوبين — Shift Tracker</title>
+  
+  <!-- خط تجوال الاحترافي -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  
+  <!-- مكتبات الواجهة عبر CDN (تعمل مباشرة بدون npm) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    body {
+      font-family: 'Tajawal', sans-serif;
+      background-color: #f8fafc;
+    }
+    /* تثبيت الأعمدة الحرج في الجدول لسهولة التصفح الرأسي والأفقي بدقة البكسل */
+    .sticky-col-first {
+      position: sticky;
+      right: 0;
+      z-index: 20;
+    }
+    .sticky-col-second {
+      position: sticky;
+      right: 64px;
+      z-index: 20;
+    }
+    .sticky-col-third {
+      position: sticky;
+      right: 224px;
+      z-index: 20;
+    }
+    .sticky-col-last {
+      position: sticky;
+      left: 0;
+      z-index: 20;
+    }
+    /* شريط التمرير */
+    ::-webkit-scrollbar {
+      height: 8px;
+      width: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #f1f5f9;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+  </style>
+</head>
+<body class="text-slate-800 antialiased selection:bg-indigo-500 selection:text-white">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    // أسماء الأشهر
+    const MONTH_NAMES = [
+      'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
+      'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'
+    ];
+
+    // دوال الحسابات الرياضية
+    function calculateShiftMinutes(startTime, endTime, breakMinutes = 0) {
+      if (!startTime || !endTime) return 0;
+      const [startH, startM] = startTime.split(':').map(Number);
+      const [endH, endM] = endTime.split(':').map(Number);
+      if (isNaN(startH) || isNaN(startM) || isNaN(endH) || isNaN(endM)) return 0;
+
+      let startTotal = startH * 60 + startM;
+      let endTotal = endH * 60 + endM;
+
+      if (endTotal < startTotal) {
+        endTotal += 24 * 60; // تخطي منتصف الليل
+      }
+
+      const total = endTotal - startTotal - (breakMinutes || 0);
+      return total > 0 ? total : 0;
+    }
+
+    function getDaysInMonth(year, month) {
+      return new Date(year, month, 0).getDate();
+    }
+
+    // التطبيق الرئيسي
+    function App() {
+      const today = useMemo(() => new Date(), []);
+      const todayStr = useMemo(() => {
+        return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      }, [today]);
+
+      // إعداد الشهر والسنة الحاليين تلقائياً
+      const [currentYear, setCurrentYear] = useState(() => today.getFullYear());
+      const [currentMonth, setCurrentMonth] = useState(() => today.getMonth() + 1);
+
+      // البيانات الأساسية مع التخزين المحلي
+      const [employees, setEmployees] = useState(() => {
+        const saved = localStorage.getItem('shift_tracker_employees');
+        return saved ? JSON.parse(saved) : [];
+      });
+
+      const [attendanceRecords, setAttendanceRecords] = useState(() => {
+        const saved = localStorage.getItem('shift_tracker_attendance');
+        return saved ? JSON.parse(saved) : {};
+      });
+
+      // الفلاتر والبحث
+      const [searchQuery, setSearchQuery] = useState('');
+      const [filterSelection, setFilterSelection] = useState('all');
+      const [filterAttendance, setFilterAttendance] = useState('all');
+      const [sortBy, setSortBy] = useState('code');
+
+      // النوافذ المنبثقة
+      const [editingCell, setEditingCell] = useState(null);
+      const [isAddEmployeeModalOpen, setIsAddEmployeeModalOpen] = useState(false);
+      const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+      const [isStatsModalOpen, setIsStatsModalOpen] = useState(false);
+      const [lastSyncTime, setLastSyncTime] = useState(new Date().toLocaleTimeString('ar-EG'));
+      const [networkOnline, setNetworkOnline] = useState(navigator.onLine);
+
+      // حفظ تلقائي
+      useEffect(() => {
+        localStorage.setItem('shift_tracker_employees', JSON.stringify(employees));
+      }, [employees]);
+
+      useEffect(() => {
+        localStorage.setItem('shift_tracker_attendance', JSON.stringify(attendanceRecords));
+      }, [attendanceRecords]);
+
+      // مراقبة اتصال الشبكة
+      useEffect(() => {
+        const handleOnline = () => setNetworkOnline(true);
+        const handleOffline = () => setNetworkOnline(false);
+        window.addEventListener('online', handleOnline);
+        window.addEventListener('offline', handleOffline);
+        return () => {
+          window.removeEventListener('online', handleOnline);
+          window.removeEventListener('offline', handleOffline);
+        };
+      }, []);
+
+      // توليد 100 مندوب للاختبار
+      const generateInitial100Delegates = () => {
+        const firstNames = ['أحمد', 'محمد', 'محمود', 'علي', 'عمر', 'خالد', 'إبراهيم', 'حسن', 'يوسف', 'طارق', 'مصطفى', 'ياسر', 'كريم', 'هشام', 'سامح'];
+        const lastNames = ['السيد', 'عبدالله', 'الشريف', 'إسماعيل', 'النجار', 'منصور', 'راضي', 'فاروق', 'عثمان', 'سالم', 'الجمال', 'حمدي', 'غانم'];
+        
+        const newEmps = [];
+        const newAttendance = { ...attendanceRecords };
+        const daysCount = getDaysInMonth(currentYear, currentMonth);
+
+        for (let i = 1; i <= 100; i++) {
+          const empId = `EMP${String(i).padStart(3, '0')}`;
+          const fn = firstNames[i % firstNames.length];
+          const ln = lastNames[(i * 3) % lastNames.length];
+          newEmps.push({
+            id: empId,
+            employeeCode: empId,
+            fullName: `${fn} ${ln}`,
+            phone: `010${Math.floor(10000000 + Math.random() * 90000000)}`,
+            hireDate: '2025-01-01',
+            status: 'active',
+            externalId: `EXT_${1000 + i}`,
+            notes: 'قوة أساسية معتمدة'
+          });
+
+          for (let d = 1; d <= Math.min(10, daysCount); d++) {
+            const dateStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+            const key = `${empId}_${dateStr}`;
+            
+            let shift = 'selected';
+            let att = 'worked';
+            let start = '09:00';
+            let end = '17:00';
+            let brk = 30;
+
+            if (d === 3 && i % 4 === 0) att = 'absent';
+            else if (d === 5 && i % 5 === 0) att = 'leave';
+            else if (d === 7 && i % 6 === 0) att = 'day_off';
+            else if (d === 10 && i % 3 === 0) {
+              shift = 'selected';
+              att = 'pending';
+            }
+
+            const totalMins = att === 'worked' ? calculateShiftMinutes(start, end, brk) : 0;
+            newAttendance[key] = {
+              id: `rec_${key}`,
+              employeeId: empId,
+              date: dateStr,
+              shiftSelection: shift,
+              attendance: att,
+              startTime: start,
+              endTime: end,
+              breakMinutes: brk,
+              totalWorkedMinutes: totalMins,
+              updatedAt: new Date().toISOString()
+            };
+          }
+        }
+        setEmployees(newEmps);
+        setAttendanceRecords(newAttendance);
+        setLastSyncTime(new Date().toLocaleTimeString('ar-EG'));
+      };
+
+      const daysInMonth = useMemo(() => {
+        return getDaysInMonth(currentYear, currentMonth);
+      }, [currentYear, currentMonth]);
+
+      const monthDaysList = useMemo(() => {
+        const days = [];
+        for (let i = 1; i <= daysInMonth; i++) {
+          const dateStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
+          const dateObj = new Date(currentYear, currentMonth - 1, i);
+          const dayName = dateObj.toLocaleDateString('ar-EG', { weekday: 'short' });
+          days.push({ dayNumber: i, dateStr, dayName });
+        }
+        return days;
+      }, [currentYear, currentMonth, daysInMonth]);
+
+      const isCurrentMonthView = today.getFullYear() === currentYear && (today.getMonth() + 1) === currentMonth;
+      const isPastMonthView = currentYear < today.getFullYear() || (currentYear === today.getFullYear() && currentMonth < (today.getMonth() + 1));
+
+      // حساب ملخص المندوبين
+      const summaries = useMemo(() => {
+        const map = {};
+        const elapsedDays = isPastMonthView ? daysInMonth : (isCurrentMonthView ? today.getDate() : 0);
+
+        employees.forEach(emp => {
+          let workedDays = 0;
+          let absentDays = 0;
+          let leaveDays = 0;
+          let dayOffDays = 0;
+          let selectedDays = 0;
+          let selectedNotWorkedDays = 0;
+          let totalMinutes = 0;
+          let scheduledDueDays = 0;
+
+          monthDaysList.forEach(({ dateStr, dayNumber }) => {
+            const key = `${emp.id}_${dateStr}`;
+            const rec = attendanceRecords[key];
+            const isDayElapsed = isPastMonthView || (isCurrentMonthView && dayNumber <= today.getDate());
+
+            if (rec) {
+              if (rec.attendance === 'worked') {
+                workedDays++;
+                totalMinutes += rec.totalWorkedMinutes || 0;
+              } else if (rec.attendance === 'absent') {
+                absentDays++;
+              } else if (rec.attendance === 'leave') {
+                leaveDays++;
+              } else if (rec.attendance === 'day_off') {
+                dayOffDays++;
+              }
+
+              if (rec.shiftSelection === 'selected') {
+                selectedDays++;
+                if (isDayElapsed && rec.attendance !== 'worked') {
+                  selectedNotWorkedDays++;
+                }
+              }
+            }
+
+            if (isDayElapsed && (!rec || (rec.attendance !== 'leave' && rec.attendance !== 'day_off'))) {
+              scheduledDueDays++;
+            }
+          });
+
+          const totalHours = Number((totalMinutes / 60).toFixed(1));
+          const avgHours = workedDays > 0 ? Number((totalHours / workedDays).toFixed(1)) : 0;
+          const commitmentBase = workedDays + absentDays;
+          const commitmentRate = commitmentBase > 0 ? Number(((workedDays / commitmentBase) * 100).toFixed(1)) : null;
+          const performanceRate = scheduledDueDays > 0 ? Number(((workedDays / scheduledDueDays) * 100).toFixed(1)) : null;
+
+          map[emp.id] = {
+            workedDays,
+            absentDays,
+            leaveDays,
+            dayOffDays,
+            selectedDays,
+            selectedNotWorkedDays,
+            totalHours,
+            avgHours,
+            commitmentRate,
+            performanceRate,
+            remainingDays: Math.max(0, daysInMonth - elapsedDays)
+          };
+        });
+        return map;
+      }, [employees, attendanceRecords, monthDaysList, isPastMonthView, isCurrentMonthView, daysInMonth, today]);
+
+      // تصفية وترتيب
+      const filteredEmployees = useMemo(() => {
+        return employees.filter(emp => {
+          const matchQuery = emp.fullName.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                             emp.employeeCode.toLowerCase().includes(searchQuery.toLowerCase());
+          if (!matchQuery) return false;
+
+          const summary = summaries[emp.id];
+          if (!summary) return true;
+
+          if (filterSelection === 'selected_not_worked' && summary.selectedNotWorkedDays === 0) return false;
+          if (filterSelection === 'not_selected' && summary.selectedDays === daysInMonth) return false;
+          if (filterAttendance === 'worked_only' && summary.workedDays === 0) return false;
+          if (filterAttendance === 'absent_only' && summary.absentDays === 0) return false;
+
+          return true;
+        }).sort((a, b) => {
+          if (sortBy === 'name') return a.fullName.localeCompare(b.fullName, 'ar');
+          if (sortBy === 'workedDays') return (summaries[b.id]?.workedDays || 0) - (summaries[a.id]?.workedDays || 0);
+          if (sortBy === 'hours') return (summaries[b.id]?.totalHours || 0) - (summaries[a.id]?.totalHours || 0);
+          if (sortBy === 'performance') return (summaries[b.id]?.performanceRate || 0) - (summaries[a.id]?.performanceRate || 0);
+          return a.employeeCode.localeCompare(b.employeeCode);
+        });
+      }, [employees, searchQuery, filterSelection, filterAttendance, sortBy, summaries, daysInMonth]);
+
+      // الإحصاءات العلوية
+      const topStats = useMemo(() => {
+        const totalHeadcount = employees.length;
+        const activeCount = employees.filter(e => e.status === 'active').length;
+        
+        let workedToday = 0;
+        let selectedToday = 0;
+        let notSelectedToday = 0;
+        let totalMonthlyHours = 0;
+
+        employees.forEach(emp => {
+          const todayKey = `${emp.id}_${todayStr}`;
+          const todayRec = attendanceRecords[todayKey];
+          if (todayRec?.attendance === 'worked') workedToday++;
+          if (todayRec?.shiftSelection === 'selected') selectedToday++;
+          else notSelectedToday++;
+
+          const summary = summaries[emp.id];
+          if (summary) totalMonthlyHours += summary.totalHours;
+        });
+
+        return {
+          totalHeadcount,
+          activeCount,
+          workedToday,
+          selectedToday,
+          notSelectedToday,
+          totalMonthlyHours: Math.round(totalMonthlyHours)
+        };
+      }, [employees, attendanceRecords, todayStr, summaries]);
+
+      // تحديد لون وحالة الخلية
+      const getCellPresentation = (empId, dateStr, dayNumber) => {
+        const key = `${empId}_${dateStr}`;
+        const record = attendanceRecords[key];
+        const isFutureDay = !isPastMonthView && (
+          currentYear > today.getFullYear() || 
+          (currentMonth > (today.getMonth() + 1)) || 
+          (isCurrentMonthView && dayNumber > today.getDate())
+        );
+
+        if (isFutureDay) {
+          if (record?.shiftSelection === 'selected') {
+            return {
+              bg: 'bg-indigo-100 hover:bg-indigo-200 border-indigo-300 text-indigo-900',
+              icon: '✦',
+              title: 'محدد مسبقاً'
+            };
+          }
+          return {
+            bg: 'bg-gray-100 hover:bg-gray-200 border-gray-200 text-gray-400',
+            icon: '—',
+            title: 'مستقبلي'
+          };
+        }
+
+        if (record?.attendance === 'leave') {
+          return {
+            bg: 'bg-slate-300 hover:bg-slate-400 border-slate-400 text-slate-900',
+            icon: '⛱',
+            title: 'إجازة'
+          };
+        }
+        if (record?.attendance === 'day_off') {
+          return {
+            bg: 'bg-stone-200 hover:bg-stone-300 border-stone-300 text-stone-800',
+            icon: '☕',
+            title: 'راحة'
+          };
+        }
+        if (record?.attendance === 'worked') {
+          return {
+            bg: 'bg-emerald-500 hover:bg-emerald-600 border-emerald-600 text-white font-bold',
+            icon: '✓',
+            title: 'حاضر'
+          };
+        }
+        if (record?.shiftSelection === 'selected' && (!record?.attendance || record?.attendance === 'pending')) {
+          return {
+            bg: 'bg-blue-500 hover:bg-blue-600 border-blue-600 text-white font-bold',
+            icon: '⏳',
+            title: 'اختار الشفت'
+          };
+        }
+        if (record?.attendance === 'absent' || (dayNumber < today.getDate() && isCurrentMonthView && record?.shiftSelection === 'selected' && record?.attendance !== 'worked')) {
+          return {
+            bg: 'bg-rose-500 hover:bg-rose-600 border-rose-600 text-white font-bold',
+            icon: '✕',
+            title: 'غياب'
+          };
+        }
+
+        return {
+          bg: 'bg-amber-400 hover:bg-amber-500 border-amber-500 text-amber-950 font-medium',
+          icon: '?',
+          title: 'لم يحدد'
+        };
+      };
+
+      // حفظ بيانات الخلية
+      const handleSaveCell = (formData) => {
+        const key = `${formData.employeeId}_${formData.date}`;
+        const totalWorkedMinutes = formData.attendance === 'worked' 
+          ? calculateShiftMinutes(formData.startTime, formData.endTime, Number(formData.breakMinutes || 0))
+          : 0;
+
+        setAttendanceRecords(prev => ({
+          ...prev,
+          [key]: {
+            id: `rec_${key}`,
+            employeeId: formData.employeeId,
+            date: formData.date,
+            shiftSelection: formData.shiftSelection,
+            attendance: formData.attendance,
+            startTime: formData.startTime,
+            endTime: formData.endTime,
+            breakMinutes: Number(formData.breakMinutes || 0),
+            totalWorkedMinutes,
+            supervisorNotes: formData.supervisorNotes,
+            updatedAt: new Date().toISOString()
+          }
+        }));
+        setEditingCell(null);
+      };
+
+      // تصدير ملف Excel / CSV
+      const handleExportCSV = () => {
+        let csvContent = '\uFEFF';
+        const headers = ['رقم المندوب', 'اسم المندوب', 'الحالة'];
+        monthDaysList.forEach(d => headers.push(`يوم ${d.dayNumber}`));
+        headers.push('أيام العمل', 'أيام الغياب', 'أيام الإجازة والراحة', 'أيام اختيار الشفت', 'ساعات العمل', 'متوسط الساعات', 'نسبة الالتزام', 'نسبة الأداء');
+        csvContent += headers.join(',') + '\r\n';
+
+        filteredEmployees.forEach(emp => {
+          const sum = summaries[emp.id];
+          const row = [
+            `"${emp.employeeCode}"`,
+            `"${emp.fullName}"`,
+            `"${emp.status === 'active' ? 'نشط' : 'موقوف'}"`
+          ];
+
+          monthDaysList.forEach(d => {
+            const key = `${emp.id}_${d.dateStr}`;
+            const rec = attendanceRecords[key];
+            let statusText = 'لم يحدد';
+            if (rec?.attendance === 'worked') statusText = 'حاضر';
+            else if (rec?.attendance === 'absent') statusText = 'غياب';
+            else if (rec?.attendance === 'leave') statusText = 'إجازة';
+            else if (rec?.attendance === 'day_off') statusText = 'راحة';
+            else if (rec?.shiftSelection === 'selected') statusText = 'اختار الشفت';
+            row.push(`"${statusText}"`);
+          });
+
+          row.push(
+            sum?.workedDays || 0,
+            sum?.absentDays || 0,
+            (sum?.leaveDays || 0) + (sum?.dayOffDays || 0),
+            sum?.selectedDays || 0,
+            sum?.totalHours || 0,
+            sum?.avgHours || 0,
+            sum?.commitmentRate ? `"${sum.commitmentRate}%"` : '"غير متاح"',
+            sum?.performanceRate ? `"${sum.performanceRate}%"` : '"غير متاح"'
+          );
+
+          csvContent += row.join(',') + '\r\n';
+        });
+
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.setAttribute('href', url);
+        link.setAttribute('download', `تقرير_الشفتات_${MONTH_NAMES[currentMonth - 1]}_${currentYear}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      };
+
+      return (
+        <div className="min-h-screen flex flex-col bg-slate-50 text-slate-800">
+          {/* الهيدر العلوي */}
+          <header className="bg-slate-900 text-white border-b border-slate-800 px-6 py-4">
+            <div className="max-w-[1900px] mx-auto flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="bg-indigo-600 p-2.5 rounded-xl shadow-lg">
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                </div>
+                <div>
+                  <h1 className="text-xl font-bold tracking-tight">نظام متابعة الشفتات وأداء المندوبين</h1>
+                  <p className="text-xs text-slate-400">لوحة تحكم شهرية لإدارة الحضور ومتابعة الأداء الميداني المباشر</p>
+                </div>
+              </div>
+
+              {/* محدد الشهر والسنة */}
+              <div className="flex items-center bg-slate-800 rounded-lg p-1 border border-slate-700">
+                <button 
+                  onClick={() => {
+                    if (currentMonth === 1) { setCurrentMonth(12); setCurrentYear(y => y - 1); }
+                    else { setCurrentMonth(m => m - 1); }
+                  }}
+                  className="px-3 py-1.5 text-sm hover:bg-slate-700 rounded text-slate-200 transition"
+                  title="الشهر السابق"
+                >◀</button>
+                <div className="px-4 py-1 font-bold text-sm text-indigo-300">
+                  {MONTH_NAMES[currentMonth - 1]} {currentYear}
+                </div>
+                <button 
+                  onClick={() => {
+                    if (currentMonth === 12) { setCurrentMonth(1); setCurrentYear(y => y + 1); }
+                    else { setCurrentMonth(m => m + 1); }
+                  }}
+                  className="px-3 py-1.5 text-sm hover:bg-slate-700 rounded text-slate-200 transition"
+                  title="الشهر التالي"
+                >▶</button>
+                <button 
+                  onClick={() => {
+                    setCurrentYear(today.getFullYear());
+                    setCurrentMonth(today.getMonth() + 1);
+                  }}
+                  className="mr-2 px-2.5 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-white rounded font-medium transition"
+                >اليوم الحالي</button>
+              </div>
+
+              {/* حالة الاتصال وتوقيت المزامنة */}
+              <div className="flex items-center gap-4 text-xs">
+                <div className="flex items-center gap-2 bg-slate-800/80 px-3 py-1.5 rounded-full border border-slate-700">
+                  <span className={`w-2.5 h-2.5 rounded-full ${networkOnline ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`}></span>
+                  <span className="text-slate-300">{networkOnline ? 'البيانات متصلة' : 'انقطع الاتصال'}</span>
+                </div>
+                <div className="text-slate-400">آخر مزامنة: <span className="text-slate-200 font-mono">{lastSyncTime}</span></div>
+              </div>
+            </div>
+          </header>
+
+          {/* بطاقات المؤشرات الرئيسية */}
+          <div className="bg-white border-b border-slate-200 px-6 py-4 shadow-sm">
+            <div className="max-w-[1900px] mx-auto grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+                <span className="text-xs text-slate-500 font-medium block">القوة الأساسية</span>
+                <span className="text-2xl font-extrabold text-slate-900">{topStats.totalHeadcount}</span>
+                <span className="text-[10px] text-slate-400 block mt-0.5">مندوب مسجل</span>
+              </div>
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3">
+                <span className="text-xs text-emerald-700 font-medium block">المندوبين النشطين</span>
+                <span className="text-2xl font-extrabold text-emerald-800">{topStats.activeCount}</span>
+                <span className="text-[10px] text-emerald-600 block mt-0.5">جاهز للعمل</span>
+              </div>
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
+                <span className="text-xs text-blue-700 font-medium block">اختاروا شفت اليوم</span>
+                <span className="text-2xl font-extrabold text-blue-800">{topStats.selectedToday}</span>
+                <span className="text-[10px] text-blue-600 block mt-0.5">شفتات مؤكدة</span>
+              </div>
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+                <span className="text-xs text-amber-700 font-medium block">لم يختاروا شفت اليوم</span>
+                <span className="text-2xl font-extrabold text-amber-800">{topStats.notSelectedToday}</span>
+                <span className="text-[10px] text-amber-600 block mt-0.5">يحتاج متابعة</span>
+              </div>
+              <div className="bg-teal-50 border border-teal-200 rounded-xl p-3">
+                <span className="text-xs text-teal-700 font-medium block">عملوا بالفعل اليوم</span>
+                <span className="text-2xl font-extrabold text-teal-800">{topStats.workedToday}</span>
+                <span className="text-[10px] text-teal-600 block mt-0.5">حضور معتمد</span>
+              </div>
+              <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3">
+                <span className="text-xs text-indigo-700 font-medium block">ساعات العمل للشهر</span>
+                <span className="text-2xl font-extrabold text-indigo-800">{topStats.totalMonthlyHours}</span>
+                <span className="text-[10px] text-indigo-600 block mt-0.5">ساعة فعلية</span>
+              </div>
+              <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 flex flex-col justify-center items-start cursor-pointer hover:bg-purple-100 transition" onClick={() => setIsStatsModalOpen(true)}>
+                <span className="text-xs text-purple-700 font-bold block">📊 التحليلات الشاملة</span>
+                <span className="text-xs text-purple-900 mt-1 underline">عرض ملخص الأداء ◀</span>
+              </div>
+            </div>
+          </div>
+
+          {/* شريط الأدوات والفلاتر */}
+          <div className="bg-slate-100 border-b border-slate-200 px-6 py-3">
+            <div className="max-w-[1900px] mx-auto flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="بحث باسم أو رقم المندوب..."
+                    className="w-56 text-sm bg-white border border-slate-300 rounded-lg pr-9 pl-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <span className="absolute right-3 top-2 text-slate-400">🔍</span>
+                </div>
+
+                <select 
+                  value={filterSelection} 
+                  onChange={(e) => setFilterSelection(e.target.value)}
+                  className="text-sm bg-white border border-slate-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="all">كل حالات الشفت</option>
+                  <option value="selected_not_worked">اختار الشفت ولم يعمل</option>
+                  <option value="not_selected">لم يكمل اختيار الشفتات</option>
+                </select>
+
+                <select 
+                  value={filterAttendance} 
+                  onChange={(e) => setFilterAttendance(e.target.value)}
+                  className="text-sm bg-white border border-slate-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="all">كل حالات الحضور</option>
+                  <option value="worked_only">الحاضرون فقط</option>
+                  <option value="absent_only">الذين لديهم غياب</option>
+                </select>
+
+                <select 
+                  value={sortBy} 
+                  onChange={(e) => setSortBy(e.target.value)}
+                  className="text-sm bg-white border border-slate-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="code">ترتيب حسب الرقم الوظيفي</option>
+                  <option value="name">ترتيب أبجدي حسب الاسم</option>
+                  <option value="workedDays">الأكثر أيام عمل</option>
+                  <option value="hours">الأعلى ساعات عمل</option>
+                  <option value="performance">الأعلى نسبة أداء</option>
+                </select>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {employees.length === 0 && (
+                  <button 
+                    onClick={generateInitial100Delegates}
+                    className="bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold px-3 py-2 rounded-lg shadow-sm transition flex items-center gap-1.5"
+                  >
+                    ⚡ تهيئة 100 مندوب للتجربة
+                  </button>
+                )}
+                <button 
+                  onClick={() => setIsAddEmployeeModalOpen(true)}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-3 py-2 rounded-lg shadow-sm transition flex items-center gap-1"
+                >
+                  + إضافة مندوب
+                </button>
+                <button 
+                  onClick={() => setIsSyncModalOpen(true)}
+                  className="bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold px-3 py-2 rounded-lg shadow-sm transition flex items-center gap-1"
+                >
+                  🔗 ربط نظام الشفتات
+                </button>
+                <button 
+                  onClick={handleExportCSV}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-3 py-2 rounded-lg shadow-sm transition flex items-center gap-1"
+                >
+                  📥 تصدير Excel / CSV
+                </button>
+                <button 
+                  onClick={() => window.print()}
+                  className="bg-slate-700 hover:bg-slate-800 text-white text-xs font-bold px-3 py-2 rounded-lg shadow-sm transition"
+                >
+                  🖨 طباعة
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* دليل الحالات */}
+          <div className="bg-white border-b border-slate-200 px-6 py-2">
+            <div className="max-w-[1900px] mx-auto flex flex-wrap items-center gap-4 text-xs">
+              <span className="font-bold text-slate-600">دليل الحالات:</span>
+              <span className="inline-flex items-center gap-1.5 text-emerald-800"><span className="w-3.5 h-3.5 bg-emerald-500 rounded text-white flex items-center justify-center text-[10px]">✓</span> أخضر: اختار وعمل بالفعل</span>
+              <span className="inline-flex items-center gap-1.5 text-rose-800"><span className="w-3.5 h-3.5 bg-rose-500 rounded text-white flex items-center justify-center text-[10px]">✕</span> أحمر: غياب بعد انتهاء اليوم</span>
+              <span className="inline-flex items-center gap-1.5 text-blue-800"><span className="w-3.5 h-3.5 bg-blue-500 rounded text-white flex items-center justify-center text-[10px]">⏳</span> أزرق: اختار الشفت بانتظار الاعتماد</span>
+              <span className="inline-flex items-center gap-1.5 text-amber-900"><span className="w-3.5 h-3.5 bg-amber-400 rounded text-black flex items-center justify-center text-[10px]">?</span> أصفر: لم يحدد الاختيار</span>
+              <span className="inline-flex items-center gap-1.5 text-slate-700"><span className="w-3.5 h-3.5 bg-slate-300 rounded text-black flex items-center justify-center text-[10px]">⛱</span> رمادي داكن: إجازة أو راحة</span>
+              <span className="inline-flex items-center gap-1.5 text-gray-500"><span className="w-3.5 h-3.5 bg-gray-100 border border-gray-300 rounded flex items-center justify-center text-[10px]">—</span> رمادي فاتح: يوم مستقبلي</span>
+            </div>
+          </div>
+
+          {/* الجدول الرئيسي */}
+          <main className="flex-1 overflow-auto p-4 max-w-[1900px] w-full mx-auto">
+            <div className="bg-white rounded-xl shadow border border-slate-200 overflow-x-auto relative">
+              <table className="w-full text-right border-collapse text-xs">
+                <thead>
+                  <tr className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200 select-none">
+                    <th className="p-2.5 w-16 text-center sticky-col-first bg-slate-100 border-l border-slate-200">الرقم</th>
+                    <th className="p-2.5 w-40 sticky-col-second bg-slate-100 border-l border-slate-200">اسم المندوب</th>
+                    <th className="p-2.5 w-20 text-center sticky-col-third bg-slate-100 border-l border-slate-200">الحالة</th>
+                    
+                    {monthDaysList.map(d => {
+                      const isTodayCol = isCurrentMonthView && d.dayNumber === today.getDate();
+                      return (
+                        <th 
+                          key={d.dayNumber} 
+                          className={`p-1 text-center w-10 min-w-[38px] border-l border-slate-200 ${isTodayCol ? 'bg-indigo-100 text-indigo-900 font-extrabold ring-1 ring-indigo-400' : ''}`}
+                        >
+                          <div className="text-[10px] text-slate-500">{d.dayName}</div>
+                          <div className="text-xs">{d.dayNumber}</div>
+                        </th>
+                      );
+                    })}
+
+                    <th className="p-2.5 min-w-[280px] w-72 text-center sticky-col-last bg-indigo-50/90 backdrop-blur-sm text-indigo-950 border-r border-indigo-200 font-extrabold">
+                      ملخص الأداء والالتزام (حتى اليوم)
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {filteredEmployees.length === 0 ? (
+                    <tr>
+                      <td colSpan={monthDaysList.length + 4} className="text-center py-12 text-slate-400">
+                        لا يوجد مندوبين مطابقين لمعايير البحث. انقر على «تهيئة 100 مندوب» أو «+ إضافة مندوب».
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredEmployees.map((emp) => {
+                      const sum = summaries[emp.id];
+                      return (
+                        <tr key={emp.id} className="hover:bg-slate-50 transition-colors">
+                          <td className="p-2 text-center font-mono text-slate-500 sticky-col-first bg-white border-l border-slate-200">
+                            {emp.employeeCode}
+                          </td>
+                          <td className="p-2 font-medium text-slate-900 truncate max-w-[160px] sticky-col-second bg-white border-l border-slate-200" title={emp.fullName}>
+                            {emp.fullName}
+                          </td>
+                          <td className="p-2 text-center sticky-col-third bg-white border-l border-slate-200">
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${emp.status === 'active' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                              {emp.status === 'active' ? 'نشط' : 'موقوف'}
+                            </span>
+                          </td>
+
+                          {monthDaysList.map(d => {
+                            const visual = getCellPresentation(emp.id, d.dateStr, d.dayNumber);
+                            const key = `${emp.id}_${d.dateStr}`;
+                            const rec = attendanceRecords[key];
+                            return (
+                              <td 
+                                key={d.dayNumber} 
+                                onClick={() => setEditingCell({ employee: emp, date: d.dateStr, record: rec })}
+                                className="p-0.5 text-center border-l border-slate-200 cursor-pointer"
+                                title={`المندوب: ${emp.fullName} | التاريخ: ${d.dateStr} | الحالة: ${visual.title}`}
+                              >
+                                <div className={`w-full h-8 flex items-center justify-center rounded border text-[11px] transition-transform active:scale-95 ${visual.bg}`}>
+                                  {visual.icon}
+                                </div>
+                              </td>
+                            );
+                          })}
+
+                          <td className="p-2 sticky-col-last bg-indigo-50/95 border-r border-indigo-200">
+                            <div className="flex flex-col gap-1 text-[11px]">
+                              <div className="flex items-center justify-between">
+                                <span className="text-slate-600">أيام العمل الفعلية:</span>
+                                <span className="font-bold text-emerald-700">{sum?.workedDays || 0} يوم</span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-slate-600">إجمالي الساعات:</span>
+                                <span className="font-bold text-indigo-700">{sum?.totalHours || 0} ساعة</span>
+                              </div>
+                              <div className="flex items-center justify-between text-[10px]">
+                                <span className="text-slate-500">غياب: {sum?.absentDays || 0} | إجازة: {sum?.leaveDays || 0}</span>
+                                <span className="text-slate-500">معدل: {sum?.avgHours || 0} س</span>
+                              </div>
+                              <div className="mt-1">
+                                <div className="flex justify-between items-center text-[10px] mb-0.5 font-bold">
+                                  <span className="text-slate-600">نسبة الأداء:</span>
+                                  <span className={sum?.performanceRate && sum.performanceRate >= 80 ? 'text-emerald-700' : 'text-amber-700'}>
+                                    {sum?.performanceRate !== null ? `${sum.performanceRate}%` : 'غير متاح'}
+                                  </span>
+                                </div>
+                                <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden">
+                                  <div 
+                                    className={`h-full ${sum?.performanceRate && sum.performanceRate >= 80 ? 'bg-emerald-500' : 'bg-amber-500'}`}
+                                    style={{ width: `${Math.min(100, sum?.performanceRate || 0)}%` }}
+                                  ></div>
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </main>
+
+          {/* نافذة تعديل بيانات الخلية */}
+          {editingCell && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-200 animate-in fade-in duration-150">
+                <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
+                  <div>
+                    <h3 className="font-bold text-base">تسجيل بيانات اليوم والشفت</h3>
+                    <p className="text-xs text-slate-400">{editingCell.employee.fullName} ({editingCell.employee.employeeCode}) — {editingCell.date}</p>
+                  </div>
+                  <button onClick={() => setEditingCell(null)} className="text-slate-400 hover:text-white text-lg">✕</button>
+                </div>
+
+                <form key={`${editingCell.employee.id}_${editingCell.date}`} onSubmit={(e) => {
+                  e.preventDefault();
+                  const form = e.target;
+                  handleSaveCell({
+                    employeeId: editingCell.employee.id,
+                    date: editingCell.date,
+                    shiftSelection: form.shiftSelection.value,
+                    attendance: form.attendance.value,
+                    startTime: form.startTime.value,
+                    endTime: form.endTime.value,
+                    breakMinutes: form.breakMinutes.value,
+                    supervisorNotes: form.supervisorNotes.value
+                  });
+                }} className="p-6 space-y-4 text-xs">
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="font-bold text-slate-700 block mb-1">حالة اختيار الشفت</label>
+                      <select name="shiftSelection" defaultValue={editingCell.record?.shiftSelection || 'selected'} className="w-full border border-slate-300 rounded-lg p-2 bg-slate-50 focus:bg-white text-xs">
+                        <option value="selected">اختار الشفت</option>
+                        <option value="not_selected">لم يختر</option>
+                        <option value="undecided">لم يحدد بعد</option>
+                        <option value="exempt">معفى (إجازة/راحة)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="font-bold text-slate-700 block mb-1">حالة الحضور الفعلي</label>
+                      <select name="attendance" defaultValue={editingCell.record?.attendance || 'worked'} className="w-full border border-slate-300 rounded-lg p-2 bg-slate-50 focus:bg-white text-xs">
+                        <option value="worked">عمل بالفعل (حاضر)</option>
+                        <option value="absent">غياب</option>
+                        <option value="leave">إجازة معتمدة</option>
+                        <option value="day_off">يوم راحة</option>
+                        <option value="pending">قيد المراجعة</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-3">
+                    <span className="font-bold text-slate-700 block text-[11px]">ساعات العمل (تدعم شفتات بعد منتصف الليل)</span>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <label className="text-slate-500 block mb-1">بداية العمل</label>
+                        <input type="time" name="startTime" defaultValue={editingCell.record?.startTime || '09:00'} className="w-full border border-slate-300 rounded p-1.5 text-xs" />
+                      </div>
+                      <div>
+                        <label className="text-slate-500 block mb-1">نهاية العمل</label>
+                        <input type="time" name="endTime" defaultValue={editingCell.record?.endTime || '17:00'} className="w-full border border-slate-300 rounded p-1.5 text-xs" />
+                      </div>
+                      <div>
+                        <label className="text-slate-500 block mb-1">الاستراحة (دقيقة)</label>
+                        <input type="number" name="breakMinutes" defaultValue={editingCell.record?.breakMinutes ?? 30} min="0" step="5" className="w-full border border-slate-300 rounded p-1.5 text-xs" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">ملاحظات المشرف</label>
+                    <textarea name="supervisorNotes" defaultValue={editingCell.record?.supervisorNotes || ''} rows="2" placeholder="أي تفاصيل خاصة بتأخير أو عذر مقبول..." className="w-full border border-slate-300 rounded-lg p-2 text-xs"></textarea>
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
+                    <button type="button" onClick={() => setEditingCell(null)} className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-100 font-medium">إلغاء</button>
+                    <button type="submit" className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold shadow-md">حفظ السجل</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* نافذة إضافة مندوب جديد */}
+          {isAddEmployeeModalOpen && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden border border-slate-200">
+                <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
+                  <h3 className="font-bold text-base">إضافة مندوب جديد</h3>
+                  <button onClick={() => setIsAddEmployeeModalOpen(false)} className="text-slate-400 hover:text-white">✕</button>
+                </div>
+                <form onSubmit={(e) => {
+                  e.preventDefault();
+                  const form = e.target;
+                  const nextCode = `EMP${String(employees.length + 1).padStart(3, '0')}`;
+                  const newEmp = {
+                    id: nextCode,
+                    employeeCode: form.code.value.trim() || nextCode,
+                    fullName: form.name.value.trim(),
+                    phone: form.phone.value.trim(),
+                    hireDate: form.hireDate.value || todayStr,
+                    status: 'active',
+                    externalId: form.externalId.value.trim() || `EXT_${Date.now()}`,
+                    notes: form.notes.value.trim()
+                  };
+                  setEmployees(prev => [...prev, newEmp]);
+                  setIsAddEmployeeModalOpen(false);
+                }} className="p-6 space-y-3 text-xs">
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">الاسم الكامل *</label>
+                    <input type="text" name="name" required placeholder="مثال: أحمد محمد علي" className="w-full border border-slate-300 rounded-lg p-2" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="font-bold text-slate-700 block mb-1">الرقم الوظيفي</label>
+                      <input type="text" name="code" placeholder="EMP101" className="w-full border border-slate-300 rounded-lg p-2" />
+                    </div>
+                    <div>
+                      <label className="font-bold text-slate-700 block mb-1">رقم الهاتف</label>
+                      <input type="text" name="phone" placeholder="01012345678" className="w-full border border-slate-300 rounded-lg p-2" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="font-bold text-slate-700 block mb-1">تاريخ التعيين</label>
+                      <input type="date" name="hireDate" defaultValue={todayStr} className="w-full border border-slate-300 rounded-lg p-2" />
+                    </div>
+                    <div>
+                      <label className="font-bold text-slate-700 block mb-1">المعرف الخارجي للربط</label>
+                      <input type="text" name="externalId" placeholder="ID في نظام الشفتات" className="w-full border border-slate-300 rounded-lg p-2" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">ملاحظات إدارية</label>
+                    <input type="text" name="notes" placeholder="المنطقة، الفرع..." className="w-full border border-slate-300 rounded-lg p-2" />
+                  </div>
+                  <div className="flex justify-end gap-2 pt-3 border-t">
+                    <button type="button" onClick={() => setIsAddEmployeeModalOpen(false)} className="px-4 py-2 border rounded-lg">إلغاء</button>
+                    <button type="submit" className="px-5 py-2 bg-indigo-600 text-white rounded-lg font-bold hover:bg-indigo-700">إضافة المندوب</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* نافذة الربط الخارجي */}
+          {isSyncModalOpen && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full overflow-hidden border border-slate-200 text-xs">
+                <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
+                  <div>
+                    <h3 className="font-bold text-base">ربط نظام اختيار الشفتات الخارجي</h3>
+                    <p className="text-xs text-slate-400">وحدة ShiftIntegrationService لمزامنة اختيارات المندوبين</p>
+                  </div>
+                  <button onClick={() => setIsSyncModalOpen(false)} className="text-slate-400 hover:text-white">✕</button>
+                </div>
+
+                <div className="p-6 space-y-4">
+                  <div className="bg-sky-50 border border-sky-200 p-3 rounded-xl text-sky-900">
+                    <span className="font-bold block mb-1">حالة التكامل الحالية:</span>
+                    <span>النظام يعمل في وضع المحاكاة الداخلي الآمن (Local Fallback Mode). يمكنك ربط API الشركة الرسمي أو استيراد ملف الشفتات.</span>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="font-bold text-slate-700 block mb-1">عنوان API الرسمي لنظام الشركة (Endpoint)</label>
+                      <input type="url" defaultValue="https://shifts-api.company.com/v1/sync" className="w-full border border-slate-300 rounded-lg p-2 font-mono" />
+                    </div>
+                    <div>
+                      <label className="font-bold text-slate-700 block mb-1">مفتاح المصادقة الآمن (API Bearer Token)</label>
+                      <input type="password" value="••••••••••••••••••••••••••••" readOnly className="w-full border border-slate-300 rounded-lg p-2 font-mono bg-slate-100" />
+                    </div>
+                  </div>
+
+                  <div className="border border-slate-200 rounded-xl p-3 bg-slate-50 space-y-2">
+                    <div className="flex justify-between font-bold text-slate-700">
+                      <span>إحصاءات المزامنة:</span>
+                      <span className="text-emerald-600">جاهز للربط</span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>وقت آخر فحص اتصال:</span>
+                      <span>{lastSyncTime}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>السجلات المطابقة:</span>
+                      <span>{employees.length} مندوب</span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>حالات التعارض:</span>
+                      <span className="text-emerald-600 font-bold">0 تعارض</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2 border-t">
+                    <button 
+                      type="button" 
+                      onClick={() => alert('تم فحص الاتصال بنجاح. زمن الاستجابة 38ms')}
+                      className="px-4 py-2 border border-slate-300 rounded-lg font-bold hover:bg-slate-100"
+                    >
+                      اختبار الاتصال
+                    </button>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => setIsSyncModalOpen(false)} className="px-4 py-2 border rounded-lg">إغلاق</button>
+                      <button 
+                        type="button" 
+                        onClick={() => {
+                          setLastSyncTime(new Date().toLocaleTimeString('ar-EG'));
+                          alert('تمت مزامنة اختيارات الشفتات بنجاح!');
+                          setIsSyncModalOpen(false);
+                        }}
+                        className="px-5 py-2 bg-sky-600 text-white rounded-lg font-bold hover:bg-sky-700"
+                      >
+                        مزامنة الآن
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* نافذة التحليلات الشاملة */}
+          {isStatsModalOpen && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto border border-slate-200 text-xs">
+                <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between sticky top-0">
+                  <h3 className="font-bold text-base">تقرير ملخص الأداء العام — {MONTH_NAMES[currentMonth - 1]} {currentYear}</h3>
+                  <button onClick={() => setIsStatsModalOpen(false)} className="text-slate-400 hover:text-white">✕</button>
+                </div>
+
+                <div className="p-6 space-y-6">
+                  <div>
+                    <h4 className="font-bold text-sm text-slate-800 mb-2 flex items-center gap-1.5">
+                      <span>🏆</span> أعلى المندوبين أداءً والتزاماً
+                    </h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      {filteredEmployees.slice(0, 4).map(emp => {
+                        const s = summaries[emp.id];
+                        return (
+                          <div key={emp.id} className="bg-emerald-50 border border-emerald-200 p-3 rounded-xl flex justify-between items-center">
+                            <div>
+                              <span className="font-bold text-emerald-950 block">{emp.fullName}</span>
+                              <span className="text-[10px] text-emerald-700">{s?.workedDays || 0} يوم عمل | {s?.totalHours || 0} ساعة</span>
+                            </div>
+                            <span className="text-base font-extrabold text-emerald-700">{s?.performanceRate || 0}%</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <h4 className="font-bold text-sm text-slate-800 mb-2 flex items-center gap-1.5">
+                      <span>⚠️</span> بحاجة إلى متابعة (الأقل التزاماً بالحضور)
+                    </h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      {filteredEmployees.slice(-4).reverse().map(emp => {
+                        const s = summaries[emp.id];
+                        return (
+                          <div key={emp.id} className="bg-rose-50 border border-rose-200 p-3 rounded-xl flex justify-between items-center">
+                            <div>
+                              <span className="font-bold text-rose-950 block">{emp.fullName}</span>
+                              <span className="text-[10px] text-rose-700">
+                                {s?.absentDays || 0} غياب | {s?.selectedNotWorkedDays || 0} اختار ولم يحضر
+                              </span>
+                            </div>
+                            <span className="text-base font-extrabold text-rose-700">{s?.commitmentRate ? `${s.commitmentRate}%` : '0%'}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl text-slate-600 leading-relaxed text-[11px]">
+                    <span className="font-bold text-slate-800 block mb-1">قواعد الحساب المعتمدة:</span>
+                    • تتم المقارنة حتى تاريخ اليوم الفعلي في الشهر الجاري، ولا تُحتسب الأيام القادمة غياباً مطلقاً.<br/>
+                    • نسبة الأداء = أيام العمل الفعلية ÷ الأيام المستحقة المنقضية (بعد استبعاد الإجازات والراحات).<br/>
+                    • الشفتات الليلية تُحسب تلقائياً بجمع الساعات بعد منتصف الليل وخصم مدة الاستراحة بالدقائق.
+                  </div>
+
+                  <div className="text-left">
+                    <button onClick={() => setIsStatsModalOpen(false)} className="px-6 py-2 bg-slate-900 text-white rounded-lg font-bold hover:bg-slate-800 transition">إغلاق</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
