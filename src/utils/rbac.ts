@@ -395,6 +395,7 @@ export function canAccessRoute(
     case 'my_portal':
       return user.role === 'delivery_rep' || hasPermission(user, 'employees.view_self', policy);
     case 'dashboard':
+    case 'monthly_grid':
       return (
         user.role !== 'delivery_rep' &&
         (hasPermission(user, 'shifts.view_all', policy) ||

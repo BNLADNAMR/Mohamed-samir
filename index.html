@@ -14,6 +14,34 @@
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet" />
     <script>
       (function () {
+        function isAbortReason(reason) {
+          if (!reason) return false;
+          var name = typeof reason === 'object' && reason.name ? String(reason.name).toLowerCase() : '';
+          var code = typeof reason === 'object' && reason.code ? reason.code : '';
+          var msg = typeof reason === 'string'
+            ? reason.toLowerCase()
+            : (typeof reason === 'object' && reason.message ? String(reason.message).toLowerCase() : '');
+          if (msg.indexOf('permission') !== -1 || msg.indexOf('quota') !== -1) return false;
+          return (
+            name === 'aborterror' ||
+            code === 20 ||
+            msg.indexOf('the user aborted a request') !== -1 ||
+            msg.indexOf('signal is aborted') !== -1 ||
+            msg.indexOf('the operation was aborted') !== -1
+          );
+        }
+        window.addEventListener('unhandledrejection', function (e) {
+          if (isAbortReason(e && e.reason)) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+          }
+        }, true);
+        window.addEventListener('error', function (e) {
+          if (isAbortReason(e && (e.error || e.message))) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+          }
+        }, true);
         try {
           var saved = localStorage.getItem('shift_tracker_theme');
           var theme = saved ? JSON.parse(saved) : null;

@@ -8,17 +8,26 @@
         "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "name": { "type": "string", "minLength": 2, "maxLength": 120 },
         "email": { "type": "string", "minLength": 3, "maxLength": 180 },
+        "emailKey": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "phone": { "type": "string", "maxLength": 32 },
+        "jobTitle": { "type": "string", "maxLength": 100 },
+        "department": { "type": "string", "maxLength": 100 },
+        "bio": { "type": "string", "maxLength": 500 },
         "role": { "type": "string", "enum": ["super_admin", "operations_manager", "supervisor", "delivery_rep", "viewer"] },
         "extraPermissions": { "type": "array", "description": "Bounded extra permissions (max 40)" },
         "revokedPermissions": { "type": "array", "description": "Bounded revoked permissions (max 40)" },
         "employeeId": { "type": "string", "maxLength": 128 },
         "teamId": { "type": "string", "maxLength": 128 },
         "status": { "type": "string", "enum": ["active", "disabled", "pending"] },
+        "personalSessionTimeoutMinutes": { "type": "number", "description": "Manual per-user idle session timeout in minutes (5..1440)" },
+        "requireReauthForSensitiveActions": { "type": "boolean", "description": "Require recent re-authentication before sensitive security changes" },
+        "securityAlertsEnabled": { "type": "boolean", "description": "Enable security notifications for account events" },
+        "lastPasswordChangedAt": { "type": "string", "format": "date-time" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" },
         "lastLoginAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["uid", "name", "email", "role", "extraPermissions", "revokedPermissions", "employeeId", "teamId", "status", "createdAt", "updatedAt"]
+      "required": ["uid", "name", "email", "emailKey", "role", "extraPermissions", "revokedPermissions", "employeeId", "teamId", "status", "createdAt", "updatedAt", "lastLoginAt"]
     },
     "PreprovisionedAccount": {
       "title": "PreprovisionedAccount",

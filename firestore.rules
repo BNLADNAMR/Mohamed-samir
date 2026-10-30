@@ -96,6 +96,12 @@ service cloud.firestore {
       );
     }
 
+    function isSystemNotLockedDown() {
+      return !exists(securityPolicyDocPath()) ||
+        !('systemLockdownMode' in get(securityPolicyDocPath()).data) ||
+        get(securityPolicyDocPath()).data.systemLockdownMode == false;
+    }
+
     // التسجيل التلقائي بدون دعوة مسبقة (بإشراف وتحكم مدير النظام ودون أي إمكانية لتصعيد الصلاحيات إلى super_admin)
     function isAutoProvisionAllowed() {
       return !exists(securityPolicyDocPath()) ||
@@ -129,7 +135,10 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'uid', 'name', 'email', 'role', 'extraPermissions', 'revokedPermissions',
-          'employeeId', 'teamId', 'status', 'emailKey', 'createdAt', 'updatedAt', 'lastLoginAt'
+          'employeeId', 'teamId', 'status', 'emailKey', 'createdAt', 'updatedAt', 'lastLoginAt',
+          'phone', 'jobTitle', 'department', 'bio',
+          'personalSessionTimeoutMinutes', 'requireReauthForSensitiveActions',
+          'securityAlertsEnabled', 'lastPasswordChangedAt'
         ]) &&
         isValidId(data.uid) &&
         data.name is string && data.name.size() >= 2 && data.name.size() <= 120 &&
@@ -141,6 +150,14 @@ service cloud.firestore {
         isValidOptionalId(data.teamId) &&
         data.status in ['active', 'disabled', 'pending'] &&
         isValidId(data.emailKey) &&
+        (!('phone' in data) || (data.phone is string && data.phone.size() <= 32)) &&
+        (!('jobTitle' in data) || (data.jobTitle is string && data.jobTitle.size() <= 100)) &&
+        (!('department' in data) || (data.department is string && data.department.size() <= 100)) &&
+        (!('bio' in data) || (data.bio is string && data.bio.size() <= 500)) &&
+        (!('personalSessionTimeoutMinutes' in data) || (data.personalSessionTimeoutMinutes is int && data.personalSessionTimeoutMinutes >= 5 && data.personalSessionTimeoutMinutes <= 1440)) &&
+        (!('requireReauthForSensitiveActions' in data) || data.requireReauthForSensitiveActions is bool) &&
+        (!('securityAlertsEnabled' in data) || data.securityAlertsEnabled is bool) &&
+        (!('lastPasswordChangedAt' in data) || data.lastPasswordChangedAt is timestamp) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp &&
         data.lastLoginAt is timestamp;
@@ -420,14 +437,22 @@ service cloud.firestore {
         isValidId(userId) &&
         isValidUserAccount(incoming()) &&
         incoming().uid == existing().uid &&
+        incoming().email == existing().email &&
         incoming().emailKey == existing().emailKey &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time && (
-          // Action 1: Owner updating own lastLoginAt or display name ONLY
+          // Action 1: Owner manually updating own personal profile or own account security preferences ONLY
           (
             request.auth.uid == userId &&
             existing().status == 'active' &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'lastLoginAt', 'updatedAt'])
+            (existing().role == 'super_admin' || isSystemNotLockedDown()) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'name', 'phone', 'jobTitle', 'department', 'bio',
+              'personalSessionTimeoutMinutes', 'requireReauthForSensitiveActions',
+              'securityAlertsEnabled', 'lastPasswordChangedAt',
+              'lastLoginAt', 'updatedAt'
+            ]) &&
+            (!('lastPasswordChangedAt' in incoming().diff(existing()).affectedKeys()) || incoming().lastPasswordChangedAt == request.time)
           ) ||
           // Action 2: Super Admin managing users (cannot self-demote or self-disable to protect last Super Admin)
           (
@@ -437,7 +462,8 @@ service cloud.firestore {
               (incoming().role == 'super_admin' && incoming().status == 'active')
             ) &&
             incoming().diff(existing()).affectedKeys().hasOnly([
-              'name', 'role', 'extraPermissions', 'revokedPermissions',
+              'name', 'phone', 'jobTitle', 'department', 'bio',
+              'role', 'extraPermissions', 'revokedPermissions',
               'employeeId', 'teamId', 'status', 'updatedAt'
             ])
           )
@@ -750,12 +776,14 @@ service cloud.firestore {
     match /auditLogs/{logId} {
       allow get: if isSignedIn() && isValidId(logId) && (
         isSuperAdmin() ||
-        (isOperationsManager() && existing().category == 'operational')
+        (isOperationsManager() && existing().category == 'operational') ||
+        (hasActiveProfile() && existing().actorUserId == request.auth.uid)
       );
 
       allow list: if isSignedIn() && (
         isSuperAdmin() ||
-        (isOperationsManager() && existing().category == 'operational')
+        (isOperationsManager() && existing().category == 'operational') ||
+        (hasActiveProfile() && existing().actorUserId == request.auth.uid)
       );
 
       allow create: if isVerifiedUser() &&

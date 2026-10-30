@@ -1,5 +1,6 @@
 import React from 'react';
 import { AlertOctagon, RefreshCw } from 'lucide-react';
+import { isBenignAbortError } from '../firebase';
 
 interface State {
   hasError: boolean;
@@ -16,6 +17,9 @@ export class FirestoreErrorBoundary extends React.Component<
   }
 
   static getDerivedStateFromError(error: Error): State {
+    if (isBenignAbortError(error)) {
+      return { hasError: false, errorMessage: '' };
+    }
     let readable = 'حدث خطأ غير متوقع أثناء معالجة البيانات أو التحقق من الصلاحيات.';
     try {
       const parsed = JSON.parse(error.message);

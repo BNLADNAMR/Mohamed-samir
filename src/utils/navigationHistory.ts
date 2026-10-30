@@ -1,16 +1,19 @@
-import { AppRoutePage } from '../types';
+import { AppRoutePage, ProfileSectionId } from '../types';
 import { ShiftCasePageType } from '../components/ShiftCaseDetailPage';
 import { SecurityHubTab } from '../components/SuperAdminSecurityHub';
+import { PROFILE_SECTION_LABELS_AR } from './profileSecurity';
 
 export interface NavigationSnapshot {
   route: AppRoutePage;
   viewTab: 'grid' | 'analytics';
   casePage: ShiftCasePageType | null;
   securityTab: SecurityHubTab;
+  profileSection?: ProfileSectionId;
 }
 
 const ROUTE_LABELS_AR: Record<AppRoutePage, string> = {
-  dashboard: 'الجدول الشهري للشفتات',
+  dashboard: 'الصفحة الرئيسية · ملخص البيانات',
+  monthly_grid: 'الجدول الشهري للشفتات',
   analytics: 'ملخص الأداء والتقارير',
   my_portal: 'بوابتي الشخصية',
   requests: 'الطلبات والإجازات',
@@ -19,7 +22,7 @@ const ROUTE_LABELS_AR: Record<AppRoutePage, string> = {
   teams: 'الفرق والمشرفون',
   audit_logs: 'سجل العمليات الأمني',
   security_settings: 'إعدادات الأمان',
-  profile: 'ملفي الشخصي',
+  profile: 'ملفي الشخصي وإجراءات الأمان',
 };
 
 const CASE_PAGE_LABELS_AR: Record<ShiftCasePageType, string> = {
@@ -47,7 +50,8 @@ export function areSnapshotsEqual(
     a.route === b.route &&
     a.viewTab === b.viewTab &&
     a.casePage === b.casePage &&
-    a.securityTab === b.securityTab
+    a.securityTab === b.securityTab &&
+    (a.profileSection ?? 'all') === (b.profileSection ?? 'all')
   );
 }
 
@@ -134,6 +138,21 @@ export function resolveBackStep(params: {
   }
 
   if (
+    current.route === 'profile' &&
+    current.profileSection &&
+    current.profileSection !== 'all'
+  ) {
+    return {
+      nextSnapshot: {
+        ...current,
+        profileSection: 'all',
+      },
+      nextStack: [],
+      actionType: 'fallback_parent',
+    };
+  }
+
+  if (
     isSecurityHubRouteForSuperAdmin(current.route, isSuperAdmin) &&
     current.securityTab !== 'overview'
   ) {
@@ -156,6 +175,7 @@ export function resolveBackStep(params: {
         viewTab: 'grid',
         casePage: null,
         securityTab: 'overview',
+        profileSection: 'all',
       },
       nextStack: [],
       actionType: 'fallback_parent',
@@ -176,11 +196,18 @@ export function getSnapshotLabelAr(
   if (snapshot.viewTab === 'analytics') {
     return 'ملخص الأداء والتقارير';
   }
-  if (snapshot.route === 'dashboard' && snapshot.casePage) {
+  if (snapshot.casePage) {
     return `تفاصيل: ${CASE_PAGE_LABELS_AR[snapshot.casePage]}`;
   }
   if (isSecurityHubRouteForSuperAdmin(snapshot.route, isSuperAdmin)) {
     return `مركز التحكم الأمني · ${SECURITY_TAB_LABELS_AR[snapshot.securityTab]}`;
+  }
+  if (
+    snapshot.route === 'profile' &&
+    snapshot.profileSection &&
+    snapshot.profileSection !== 'all'
+  ) {
+    return `ملفي الشخصي · ${PROFILE_SECTION_LABELS_AR[snapshot.profileSection]}`;
   }
   return ROUTE_LABELS_AR[snapshot.route] || 'الصفحة الرئيسية';
 }

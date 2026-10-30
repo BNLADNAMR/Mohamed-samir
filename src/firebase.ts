@@ -2,6 +2,9 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
+import { isBenignAbortError } from './utils/abortErrorGuard';
+
+export { isBenignAbortError };
 
 const app = initializeApp(firebaseConfig);
 
@@ -40,7 +43,11 @@ export function handleFirestoreError(
   error: unknown,
   operationType: OperationType,
   path: string | null
-): never {
+): void {
+  if (isBenignAbortError(error)) {
+    return;
+  }
+
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
@@ -66,6 +73,9 @@ export async function validateFirestoreConnection(): Promise<void> {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
   } catch (error) {
+    if (isBenignAbortError(error)) {
+      return;
+    }
     if (
       error instanceof Error &&
       error.message.includes('the client is offline')

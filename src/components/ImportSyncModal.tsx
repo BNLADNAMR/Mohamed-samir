@@ -7,6 +7,7 @@ import {
   UserProfile,
 } from '../types';
 import { hasPermission } from '../utils/rbac';
+import { isBenignAbortError } from '../firebase';
 import { saveSecurityPolicySettings } from '../services/firestoreService';
 
 interface ImportSyncModalProps {
@@ -49,13 +50,20 @@ export const ImportSyncModal: React.FC<ImportSyncModalProps> = ({
   } | null>(null);
   const [isTesting, setIsTesting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const syncAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      if (syncAbortRef.current) {
+        syncAbortRef.current.abort();
+        syncAbortRef.current = null;
+      }
+    };
   }, [onClose]);
 
   const handleSaveEndpoint = async () => {
@@ -88,6 +96,12 @@ export const ImportSyncModal: React.FC<ImportSyncModalProps> = ({
       return;
     }
 
+    if (syncAbortRef.current) {
+      syncAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    syncAbortRef.current = controller;
+
     setIsTesting(true);
     setStatusBanner(null);
     try {
@@ -95,6 +109,7 @@ export const ImportSyncModal: React.FC<ImportSyncModalProps> = ({
       const response = await fetch('/api/external-sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           endpointUrl: trimmed,
           actorRole: currentUser.role,
@@ -134,6 +149,9 @@ export const ImportSyncModal: React.FC<ImportSyncModalProps> = ({
         onClose();
       }
     } catch (err) {
+      if (isBenignAbortError(err)) {
+        return;
+      }
       setStatusBanner({
         type: 'error',
         text:
@@ -142,7 +160,10 @@ export const ImportSyncModal: React.FC<ImportSyncModalProps> = ({
             : 'تعذر الاتصال بالنظام الخارجي. يمكنك استخدام استيراد ملف JSON المعتمد.',
       });
     } finally {
-      setIsTesting(false);
+      if (syncAbortRef.current === controller) {
+        syncAbortRef.current = null;
+        setIsTesting(false);
+      }
     }
   };
 

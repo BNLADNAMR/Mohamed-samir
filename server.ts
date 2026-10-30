@@ -181,6 +181,18 @@ async function startServer() {
         },
       });
     } catch (err) {
+      const errName = (err as { name?: string })?.name || '';
+      const errMsg = err instanceof Error ? err.message : '';
+      if (
+        errName === 'AbortError' ||
+        /aborted/i.test(errMsg)
+      ) {
+        res.status(504).json({
+          error:
+            'انتهت مهلة الاتصال بالنظام الخارجي (12 ثانية). يرجى التحقق من استجابة الرابط والمحاولة مجدداً.',
+        });
+        return;
+      }
       res.status(500).json({
         error:
           err instanceof Error

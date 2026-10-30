@@ -53,6 +53,7 @@ export type PermissionKey =
 
 export type AppRoutePage =
   | 'dashboard'
+  | 'monthly_grid'
   | 'analytics'
   | 'my_portal'
   | 'requests'
@@ -95,17 +96,46 @@ export interface AttendanceRecord {
   updatedAt: string;
 }
 
+export type ProfileSectionId =
+  | 'all'
+  | 'personal_info'
+  | 'password_credentials'
+  | 'security_procedures'
+  | 'role_and_activity';
+
+export interface PersonalInfoUpdateInput {
+  name: string;
+  phone: string;
+  jobTitle: string;
+  department: string;
+  bio: string;
+}
+
+export interface AccountSecurityUpdateInput {
+  personalSessionTimeoutMinutes: number;
+  requireReauthForSensitiveActions: boolean;
+  securityAlertsEnabled: boolean;
+}
+
 export interface UserProfile {
   uid: string;
   name: string;
   email: string;
   emailKey: string;
+  phone?: string;
+  jobTitle?: string;
+  department?: string;
+  bio?: string;
   role: UserRole;
   extraPermissions: PermissionKey[];
   revokedPermissions: PermissionKey[];
   employeeId: string;
   teamId: string;
   status: AccountStatus;
+  personalSessionTimeoutMinutes?: number;
+  requireReauthForSensitiveActions?: boolean;
+  securityAlertsEnabled?: boolean;
+  lastPasswordChangedAt?: string;
   createdAt: string;
   updatedAt: string;
   lastLoginAt: string;
