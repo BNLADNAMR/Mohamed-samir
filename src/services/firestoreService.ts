@@ -163,6 +163,21 @@ export async function updateUserAccountByAdmin(params: {
       updatedAt: serverTimestamp(),
     });
 
+    // فك ارتباط سجل المندوب السابق إذا تم تغييره أو إلغاؤه
+    if (
+      params.targetUser.employeeId &&
+      params.targetUser.employeeId !== params.updates.employeeId
+    ) {
+      const prevEmpRef = doc(db, 'employees', sanitizeId(params.targetUser.employeeId));
+      const prevEmpSnap = await getDoc(prevEmpRef);
+      if (prevEmpSnap.exists() && prevEmpSnap.data().userId === params.targetUser.uid) {
+        await updateDoc(prevEmpRef, {
+          userId: '',
+          updatedAt: serverTimestamp(),
+        });
+      }
+    }
+
     // إذا تم ربط الحساب بسجل مندوب موجود، نحدّث حقل userId على سجل المندوب دون إنشاء مندوب مكرر
     if (params.updates.employeeId) {
       const empRef = doc(db, 'employees', sanitizeId(params.updates.employeeId));
@@ -232,6 +247,74 @@ export async function updatePreprovisionedInvitationByAdmin(params: {
 }
 
 /**
+ * حذف دعوة حساب معلقة نهائياً بواسطة مدير النظام
+ */
+export async function deletePreprovisionedInvitationByAdmin(params: {
+  actor: UserProfile;
+  invitation: PreprovisionedInvitation;
+}): Promise<void> {
+  const path = `preprovisionedUsers/${params.invitation.emailKey}`;
+  try {
+    await deleteDoc(doc(db, 'preprovisionedUsers', params.invitation.emailKey));
+    await recordAuditLog({
+      actor: params.actor,
+      category: 'security',
+      action: 'حذف دعوة حساب معتمدة مسبقاً',
+      targetType: 'user_invitation',
+      targetId: params.invitation.emailKey,
+      beforeSummary: `البريد: ${params.invitation.email} | الدور: ${params.invitation.role}`,
+      reason: 'إلغاء وحذف الدعوة بواسطة مدير النظام',
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+/**
+ * حذف سجل مستخدم غير مدير نظام بواسطة مدير النظام مع فك ارتباط المندوب إن وجد
+ */
+export async function deleteUserAccountByAdmin(params: {
+  actor: UserProfile;
+  targetUser: UserProfile;
+}): Promise<void> {
+  const path = `users/${params.targetUser.uid}`;
+  try {
+    await deleteDoc(doc(db, 'users', params.targetUser.uid));
+
+    if (params.targetUser.emailKey) {
+      const invRef = doc(db, 'preprovisionedUsers', params.targetUser.emailKey);
+      const invSnap = await getDoc(invRef);
+      if (invSnap.exists()) {
+        await deleteDoc(invRef);
+      }
+    }
+
+    if (params.targetUser.employeeId) {
+      const empRef = doc(db, 'employees', sanitizeId(params.targetUser.employeeId));
+      const empSnap = await getDoc(empRef);
+      if (empSnap.exists() && empSnap.data().userId === params.targetUser.uid) {
+        await updateDoc(empRef, {
+          userId: '',
+          updatedAt: serverTimestamp(),
+        });
+      }
+    }
+
+    await recordAuditLog({
+      actor: params.actor,
+      category: 'security',
+      action: 'حذف حساب مستخدم من النظام',
+      targetType: 'user',
+      targetId: params.targetUser.uid,
+      beforeSummary: `${params.targetUser.name} (${params.targetUser.email}) — الدور: ${params.targetUser.role}`,
+      reason: 'حذف إداري كامل بواسطة مدير النظام',
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+/**
  * إنشاء أو تعديل فريق تشغيلي وتعيين المشرف
  */
 export async function saveTeamRecord(params: {
@@ -294,6 +377,41 @@ export async function saveTeamRecord(params: {
       params.isEdit ? OperationType.UPDATE : OperationType.CREATE,
       path
     );
+  }
+}
+
+/**
+ * حذف فريق تشغيلي بواسطة مدير النظام وإخلاء ارتباط أعضائه بأمان
+ */
+export async function deleteTeamByAdmin(params: {
+  actor: UserProfile;
+  team: Team;
+  teamMembers?: Employee[];
+}): Promise<void> {
+  const teamId = sanitizeId(params.team.teamId);
+  const path = `teams/${teamId}`;
+  try {
+    const batch = writeBatch(db);
+    (params.teamMembers || []).slice(0, 350).forEach((emp) => {
+      batch.update(doc(db, 'employees', sanitizeId(emp.id)), {
+        teamId: '',
+        updatedAt: serverTimestamp(),
+      });
+    });
+    batch.delete(doc(db, 'teams', teamId));
+    await batch.commit();
+
+    await recordAuditLog({
+      actor: params.actor,
+      category: 'security',
+      action: 'حذف فريق تشغيلي',
+      targetType: 'team',
+      targetId: teamId,
+      beforeSummary: `الفريق: ${params.team.teamName} (${teamId})`,
+      reason: 'حذف الفريق بواسطة مدير النظام',
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
 
@@ -747,6 +865,7 @@ export async function decideWorkflowRequest(params: {
 export async function saveSecurityPolicySettings(params: {
   actor: UserProfile;
   settings: Omit<SecurityPolicySettings, 'policyId' | 'updatedBy' | 'updatedAt'>;
+  auditActionLabel?: string;
 }): Promise<void> {
   const path = 'securitySettings/global';
   const ref = doc(db, 'securitySettings', 'global');
@@ -754,15 +873,46 @@ export async function saveSecurityPolicySettings(params: {
     const snap = await getDoc(ref);
     const payload = {
       policyId: 'global',
-      allowSupervisorLeaveRecommendation: params.settings.allowSupervisorLeaveRecommendation,
-      allowViewerExport: params.settings.allowViewerExport,
-      allowOpsIntegrationSync: params.settings.allowOpsIntegrationSync,
-      enforceAdminMfaNotice: params.settings.enforceAdminMfaNotice,
-      sessionTimeoutMinutes: Math.max(5, Math.min(1440, Math.round(params.settings.sessionTimeoutMinutes))),
+      allowSupervisorLeaveRecommendation: Boolean(
+        params.settings.allowSupervisorLeaveRecommendation
+      ),
+      allowViewerExport: Boolean(params.settings.allowViewerExport),
+      allowOpsIntegrationSync: Boolean(params.settings.allowOpsIntegrationSync),
+      enforceAdminMfaNotice: Boolean(params.settings.enforceAdminMfaNotice),
+      emergencyReadOnlyMode: Boolean(params.settings.emergencyReadOnlyMode),
+      systemLockdownMode: Boolean(params.settings.systemLockdownMode),
+      lockdownMessage: (
+        params.settings.lockdownMessage ||
+        'النظام في وضع الصيانة الأمنية المؤقتة بأمر من مدير النظام. يرجى المحاولة لاحقاً.'
+      )
+        .trim()
+        .slice(0, 300),
+      autoProvisionWithoutInvite: params.settings.autoProvisionWithoutInvite !== false,
+      autoProvisionDefaultRole: (
+        ['operations_manager', 'supervisor', 'delivery_rep', 'viewer'].includes(
+          params.settings.autoProvisionDefaultRole
+        )
+          ? params.settings.autoProvisionDefaultRole
+          : 'viewer'
+      ) as SecurityPolicySettings['autoProvisionDefaultRole'],
+      autoProvisionDefaultStatus:
+        params.settings.autoProvisionDefaultStatus === 'pending' ? 'pending' : 'active',
+      opsGrantedPerms: (params.settings.opsGrantedPerms || []).slice(0, 40),
+      opsRevokedPerms: (params.settings.opsRevokedPerms || []).slice(0, 40),
+      supGrantedPerms: (params.settings.supGrantedPerms || []).slice(0, 40),
+      supRevokedPerms: (params.settings.supRevokedPerms || []).slice(0, 40),
+      repGrantedPerms: (params.settings.repGrantedPerms || []).slice(0, 40),
+      repRevokedPerms: (params.settings.repRevokedPerms || []).slice(0, 40),
+      viewerGrantedPerms: (params.settings.viewerGrantedPerms || []).slice(0, 40),
+      viewerRevokedPerms: (params.settings.viewerRevokedPerms || []).slice(0, 40),
+      sessionTimeoutMinutes: Math.max(
+        5,
+        Math.min(1440, Math.round(params.settings.sessionTimeoutMinutes || 60))
+      ),
       externalSyncEndpoint: (params.settings.externalSyncEndpoint || '').trim().slice(0, 300),
       lastExternalSyncStatus: (params.settings.lastExternalSyncStatus || '').slice(0, 100),
-      lastExternalSyncImported: Math.max(0, params.settings.lastExternalSyncImported),
-      lastExternalSyncFailed: Math.max(0, params.settings.lastExternalSyncFailed),
+      lastExternalSyncImported: Math.max(0, params.settings.lastExternalSyncImported || 0),
+      lastExternalSyncFailed: Math.max(0, params.settings.lastExternalSyncFailed || 0),
       lastExternalSyncTime: (params.settings.lastExternalSyncTime || '—').slice(0, 64),
       updatedBy: params.actor.uid,
       updatedAt: serverTimestamp(),
@@ -777,10 +927,10 @@ export async function saveSecurityPolicySettings(params: {
     await recordAuditLog({
       actor: params.actor,
       category: 'security',
-      action: 'تحديث إعدادات الأمان وسياسات النظام',
+      action: params.auditActionLabel || 'تحديث إعدادات الأمان وسياسات النظام',
       targetType: 'securitySettings',
       targetId: 'global',
-      afterSummary: `توصية المشرف: ${payload.allowSupervisorLeaveRecommendation} | تصدير المراقب: ${payload.allowViewerExport} | مهلة الجلسة: ${payload.sessionTimeoutMinutes}د`,
+      afterSummary: `دخول تلقائي بدون دعوة: ${payload.autoProvisionWithoutInvite ? 'مفعل' : 'متوقف'} (${payload.autoProvisionDefaultRole}) | تجميد التعديلات: ${payload.emergencyReadOnlyMode ? 'مفعل' : 'متوقف'} | قفل النظام: ${payload.systemLockdownMode ? 'مفعل' : 'متوقف'}`,
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);

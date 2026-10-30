@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Clock, Trash2, Check, ShieldAlert } from 'lucide-react';
+import { X, Clock, Trash2, Check, ShieldAlert, ArrowRight } from 'lucide-react';
 import {
   AttendanceRecord,
   AttendanceStatus,
@@ -117,12 +117,23 @@ export const CellEditorModal: React.FC<CellEditorModalProps> = ({
         className="bg-white dark:bg-slate-900 rounded-xl shadow-xl max-w-lg w-full overflow-hidden border border-slate-200 dark:border-slate-800"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="bg-slate-900 dark:bg-slate-950 text-white px-6 py-4 flex items-center justify-between border-b border-slate-800">
-          <div>
-            <h3 className="font-bold text-base">تسجيل بيانات اليوم والشفت</h3>
-            <p className="text-xs text-slate-300 mt-0.5 font-mono tabular-nums">
-              {employee.fullName} · {employee.employeeCode} · {date}
-            </p>
+        <div className="bg-slate-900 dark:bg-slate-950 text-white px-6 py-4 flex items-center justify-between gap-3 border-b border-slate-800">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors shrink-0 cursor-pointer"
+              title="الرجوع للخلف"
+            >
+              <ArrowRight className="w-4 h-4 text-indigo-400" />
+              <span>رجوع للخلف</span>
+            </button>
+            <div>
+              <h3 className="font-bold text-base">تسجيل بيانات اليوم والشفت</h3>
+              <p className="text-xs text-slate-300 mt-0.5 font-mono tabular-nums">
+                {employee.fullName} · {employee.employeeCode} · {date}
+              </p>
+            </div>
           </div>
           <button
             type="button"

@@ -56,6 +56,7 @@ export type AppRoutePage =
   | 'analytics'
   | 'my_portal'
   | 'requests'
+  | 'security_center'
   | 'users'
   | 'teams'
   | 'audit_logs'
@@ -193,6 +194,20 @@ export interface SecurityPolicySettings {
   allowViewerExport: boolean;
   allowOpsIntegrationSync: boolean;
   enforceAdminMfaNotice: boolean;
+  emergencyReadOnlyMode: boolean;
+  systemLockdownMode: boolean;
+  lockdownMessage: string;
+  autoProvisionWithoutInvite: boolean;
+  autoProvisionDefaultRole: Exclude<UserRole, 'super_admin'>;
+  autoProvisionDefaultStatus: 'active' | 'pending';
+  opsGrantedPerms: PermissionKey[];
+  opsRevokedPerms: PermissionKey[];
+  supGrantedPerms: PermissionKey[];
+  supRevokedPerms: PermissionKey[];
+  repGrantedPerms: PermissionKey[];
+  repRevokedPerms: PermissionKey[];
+  viewerGrantedPerms: PermissionKey[];
+  viewerRevokedPerms: PermissionKey[];
   sessionTimeoutMinutes: number;
   externalSyncEndpoint: string;
   lastExternalSyncStatus: string;

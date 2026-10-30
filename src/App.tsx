@@ -17,6 +17,9 @@ import {
   LogOut,
   CloudUpload,
   Lock,
+  ShieldAlert,
+  ArrowRight,
+  Home,
 } from 'lucide-react';
 import {
   collection,
@@ -67,6 +70,7 @@ import {
   recordAuditLog,
   saveAttendanceFirestore,
   saveEmployeeFirestore,
+  saveSecurityPolicySettings,
 } from './services/firestoreService';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { FirestoreErrorBoundary } from './components/FirestoreErrorBoundary';
@@ -86,12 +90,25 @@ import { RequestsPage } from './components/RequestsPage';
 import { ProfileAndRepPortalPage } from './components/ProfileAndRepPortalPage';
 import { AuditLogsPage } from './components/AuditLogsPage';
 import { SecuritySettingsPage } from './components/SecuritySettingsPage';
+import {
+  SecurityHubTab,
+  SuperAdminSecurityHub,
+} from './components/SuperAdminSecurityHub';
+import {
+  NavigationSnapshot,
+  areSnapshotsEqual,
+  getBackTargetHintAr,
+  getSnapshotLabelAr,
+  pushNavigationSnapshot,
+  resolveBackStep,
+} from './utils/navigationHistory';
 
 const VALID_ROUTES: Set<string> = new Set([
   'dashboard',
   'analytics',
   'my_portal',
   'requests',
+  'security_center',
   'users',
   'teams',
   'audit_logs',
@@ -127,31 +144,21 @@ function AuthenticatedWorkspace({
   const currentUser = userProfile!;
   const defaultRoute = getDefaultRouteForRole(currentUser.role);
 
+  const getInitialSecurityTabFromRoute = (route: AppRoutePage): SecurityHubTab => {
+    if (route === 'users') return 'users';
+    if (route === 'teams') return 'teams';
+    if (route === 'audit_logs') return 'audit_and_simulator';
+    return 'overview';
+  };
+
   const [activeRoute, setActiveRoute] = useState<AppRoutePage>(() =>
     parseHashRoute(defaultRoute)
   );
+  const [securityHubTab, setSecurityHubTab] = useState<SecurityHubTab>(() =>
+    getInitialSecurityTabFromRoute(parseHashRoute(defaultRoute))
+  );
+  const [navHistory, setNavHistory] = useState<NavigationSnapshot[]>([]);
   const [mfaNoticeDismissed, setMfaNoticeDismissed] = useState(false);
-
-  // مزامنة المسار مع عنوان الرابط (Hash Routing) لرصد أي محاولة دخول يدوية عبر الرابط
-  useEffect(() => {
-    const onHashChange = () => {
-      const next = parseHashRoute(defaultRoute);
-      setActiveRoute(next);
-    };
-    window.addEventListener('hashchange', onHashChange);
-    return () => window.removeEventListener('hashchange', onHashChange);
-  }, [defaultRoute]);
-
-  const navigateToRoute = useCallback((route: AppRoutePage) => {
-    if (route === 'analytics') {
-      setActiveViewTab('analytics');
-      return;
-    }
-    setActiveRoute(route);
-    if (typeof window !== 'undefined') {
-      window.history.replaceState(null, '', `#${route}`);
-    }
-  }, []);
 
   // التاريخ الحالي
   const [today, setToday] = useState<Date>(() => new Date());
@@ -245,6 +252,139 @@ function AuthenticatedWorkspace({
     },
     []
   );
+
+  // لقطة التنقل الحالية وسجل الرجوع للخلف عبر جميع صفحات وأقسام النظام
+  const currentNavSnapshot: NavigationSnapshot = useMemo(
+    () => ({
+      route: activeRoute,
+      viewTab: activeViewTab,
+      casePage: activeCasePage,
+      securityTab: securityHubTab,
+    }),
+    [activeRoute, activeViewTab, activeCasePage, securityHubTab]
+  );
+
+  const applyNavigation = useCallback(
+    (
+      partialNext: Partial<NavigationSnapshot>,
+      options?: { pushBrowserHistory?: boolean }
+    ) => {
+      const next: NavigationSnapshot = {
+        route: partialNext.route ?? activeRoute,
+        viewTab: partialNext.viewTab ?? activeViewTab,
+        casePage:
+          partialNext.casePage !== undefined ? partialNext.casePage : activeCasePage,
+        securityTab: partialNext.securityTab ?? securityHubTab,
+      };
+
+      if (areSnapshotsEqual(currentNavSnapshot, next)) return;
+
+      setNavHistory((prev) =>
+        pushNavigationSnapshot(prev, currentNavSnapshot, next)
+      );
+      setActiveRoute(next.route);
+      setActiveViewTab(next.viewTab);
+      setActiveCasePage(next.casePage);
+      setSecurityHubTab(next.securityTab);
+
+      if (typeof window !== 'undefined' && options?.pushBrowserHistory !== false) {
+        window.history.pushState(
+          { shiftTrackerNav: next },
+          '',
+          `#${next.route}`
+        );
+      }
+    },
+    [
+      activeRoute,
+      activeViewTab,
+      activeCasePage,
+      securityHubTab,
+      currentNavSnapshot,
+    ]
+  );
+
+  const navigateToRoute = useCallback(
+    (route: AppRoutePage) => {
+      if (route === 'analytics') {
+        applyNavigation({ viewTab: 'analytics' });
+        return;
+      }
+      const nextSecTab: SecurityHubTab =
+        route === 'users'
+          ? 'users'
+          : route === 'teams'
+          ? 'teams'
+          : route === 'audit_logs'
+          ? 'audit_and_simulator'
+          : route === 'security_center'
+          ? 'overview'
+          : securityHubTab;
+
+      applyNavigation({
+        route,
+        viewTab: 'grid',
+        casePage: null,
+        securityTab: nextSecTab,
+      });
+    },
+    [applyNavigation, securityHubTab]
+  );
+
+  // مزامنة زر الرجوع في المتصفح وتغيير الرابط اليدوي مع مكدس التنقل الداخلي
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!window.history.state?.shiftTrackerNav) {
+      window.history.replaceState(
+        { shiftTrackerNav: currentNavSnapshot },
+        '',
+        window.location.hash || `#${activeRoute}`
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const onPopState = (event: PopStateEvent) => {
+      const restored = event.state?.shiftTrackerNav as
+        | NavigationSnapshot
+        | undefined;
+      if (restored && VALID_ROUTES.has(restored.route)) {
+        setNavHistory((prev) => {
+          if (prev.length === 0) return prev;
+          const copy = [...prev];
+          copy.pop();
+          return copy;
+        });
+        setActiveRoute(restored.route);
+        setActiveViewTab(restored.viewTab || 'grid');
+        setActiveCasePage(restored.casePage ?? null);
+        setSecurityHubTab(restored.securityTab || 'overview');
+      }
+    };
+
+    const onHashChange = () => {
+      const nextRoute = parseHashRoute(defaultRoute);
+      if (nextRoute !== activeRoute) {
+        applyNavigation(
+          {
+            route: nextRoute,
+            viewTab: 'grid',
+            casePage: null,
+            securityTab: getInitialSecurityTabFromRoute(nextRoute),
+          },
+          { pushBrowserHistory: false }
+        );
+      }
+    };
+
+    window.addEventListener('popstate', onPopState);
+    window.addEventListener('hashchange', onHashChange);
+    return () => {
+      window.removeEventListener('popstate', onPopState);
+      window.removeEventListener('hashchange', onHashChange);
+    };
+  }, [activeRoute, applyNavigation, defaultRoute]);
 
   // الاستماع اللحظي من Cloud Firestore وفق صلاحيات ونطاق كل دور بدقة
   useEffect(() => {
@@ -1307,8 +1447,9 @@ function AuthenticatedWorkspace({
   };
 
   // عناصر شريط التنقل المرئية حسب صلاحية المستخدم الفعلية فقط
-  const navItems: { route: AppRoutePage; label: string; badge?: number }[] = useMemo(() => {
-    const items: { route: AppRoutePage; label: string; badge?: number }[] = [];
+  // بالنسبة لمدير النظام (Super Admin): يتم توحيد كافة أدوات الحوكمة والأمان والمستخدمين والفرق والسجلات داخل "مركز التحكم الأمني الشامل" في مكان واحد مخصص
+  const navItems: { route: AppRoutePage; label: string; badge?: number | string }[] = useMemo(() => {
+    const items: { route: AppRoutePage; label: string; badge?: number | string }[] = [];
 
     if (canAccessRoute(currentUser, 'dashboard', securityPolicy)) {
       items.push({ route: 'dashboard', label: 'الجدول الشهري' });
@@ -1326,24 +1467,162 @@ function AuthenticatedWorkspace({
         badge: pendingCount > 0 ? pendingCount : undefined,
       });
     }
-    if (canAccessRoute(currentUser, 'teams', securityPolicy)) {
-      items.push({ route: 'teams', label: 'الفرق والمشرفون' });
+
+    if (currentUser.role === 'super_admin') {
+      items.push({
+        route: 'security_center',
+        label: 'مركز التحكم الأمني الشامل',
+        badge:
+          securityPolicy.systemLockdownMode || securityPolicy.emergencyReadOnlyMode
+            ? 'طوارئ'
+            : undefined,
+      });
+    } else {
+      if (canAccessRoute(currentUser, 'teams', securityPolicy)) {
+        items.push({ route: 'teams', label: 'الفرق والمشرفون' });
+      }
+      if (canAccessRoute(currentUser, 'users', securityPolicy)) {
+        items.push({ route: 'users', label: 'إدارة المستخدمين' });
+      }
+      if (canAccessRoute(currentUser, 'audit_logs', securityPolicy)) {
+        items.push({ route: 'audit_logs', label: 'سجل العمليات' });
+      }
     }
-    if (canAccessRoute(currentUser, 'users', securityPolicy)) {
-      items.push({ route: 'users', label: 'إدارة المستخدمين' });
-    }
-    if (canAccessRoute(currentUser, 'audit_logs', securityPolicy)) {
-      items.push({ route: 'audit_logs', label: 'سجل الأمان' });
-    }
-    if (canAccessRoute(currentUser, 'security_settings', securityPolicy)) {
-      items.push({ route: 'security_settings', label: 'إعدادات الأمان' });
-    }
+
     items.push({ route: 'profile', label: 'ملفي الشخصي' });
 
     return items;
   }, [currentUser, securityPolicy, requests]);
 
+  const isSuperAdminInSecurityHub =
+    currentUser.role === 'super_admin' &&
+    (activeRoute === 'security_center' ||
+      activeRoute === 'users' ||
+      activeRoute === 'teams' ||
+      activeRoute === 'audit_logs' ||
+      activeRoute === 'security_settings');
+
   const isRouteAuthorized = canAccessRoute(currentUser, activeRoute, securityPolicy);
+
+  const hasOpenModal =
+    Boolean(editingCell) || employeeModalState.open || isSyncModalOpen;
+
+  const backTargetHint = useMemo(
+    () =>
+      getBackTargetHintAr({
+        stack: navHistory,
+        current: currentNavSnapshot,
+        defaultRoute,
+        isSuperAdmin: currentUser.role === 'super_admin',
+      }),
+    [navHistory, currentNavSnapshot, defaultRoute, currentUser.role]
+  );
+
+  const currentPageLabel = useMemo(
+    () =>
+      getSnapshotLabelAr(
+        currentNavSnapshot,
+        currentUser.role === 'super_admin'
+      ),
+    [currentNavSnapshot, currentUser.role]
+  );
+
+  const isAtRootHome =
+    activeRoute === defaultRoute &&
+    activeViewTab === 'grid' &&
+    activeCasePage === null &&
+    !(isSuperAdminInSecurityHub && securityHubTab !== 'overview');
+
+  const handleGlobalBack = useCallback(() => {
+    // 1. إغلاق أي نافذة منبثقة مفتوحة أولاً
+    if (editingCell) {
+      setEditingCell(null);
+      return;
+    }
+    if (employeeModalState.open) {
+      setEmployeeModalState({ open: false, editingEmployee: null });
+      return;
+    }
+    if (isSyncModalOpen) {
+      setIsSyncModalOpen(false);
+      return;
+    }
+
+    // 2. الرجوع خطوة للخلف عبر سجل الصفحات والتبويبات أو الصفحة الأب
+    const resolution = resolveBackStep({
+      stack: navHistory,
+      current: currentNavSnapshot,
+      defaultRoute,
+      isSuperAdmin: currentUser.role === 'super_admin',
+    });
+
+    if (resolution.nextSnapshot) {
+      setNavHistory(resolution.nextStack);
+      setActiveRoute(resolution.nextSnapshot.route);
+      setActiveViewTab(resolution.nextSnapshot.viewTab);
+      setActiveCasePage(resolution.nextSnapshot.casePage);
+      setSecurityHubTab(resolution.nextSnapshot.securityTab);
+      if (typeof window !== 'undefined') {
+        window.history.replaceState(
+          { shiftTrackerNav: resolution.nextSnapshot },
+          '',
+          `#${resolution.nextSnapshot.route}`
+        );
+      }
+      return;
+    }
+
+    // 3. عند التواجد في الصفحة الرئيسية مع وجود فلاتر أو شهر مختلف، نرجع للعرض الافتراضي
+    const hasActiveFilters =
+      Boolean(searchQuery) ||
+      filterSelection !== 'all' ||
+      filterAttendance !== 'all';
+
+    if (hasActiveFilters) {
+      setSearchQuery('');
+      setFilterSelection('all');
+      setFilterAttendance('all');
+      showToast('تم الرجوع للخلف وإلغاء الفلاتر النشطة.', 'info');
+      return;
+    }
+
+    if (!isCurrentMonthView) {
+      setCurrentYear(today.getFullYear());
+      setCurrentMonth(today.getMonth() + 1);
+      showToast('تم الرجوع إلى عرض الشهر الحالي.', 'info');
+      return;
+    }
+
+    showToast('أنت حالياً في الصفحة الرئيسية الأساسية للنظام.', 'info');
+  }, [
+    editingCell,
+    employeeModalState.open,
+    isSyncModalOpen,
+    navHistory,
+    currentNavSnapshot,
+    defaultRoute,
+    currentUser.role,
+    searchQuery,
+    filterSelection,
+    filterAttendance,
+    isCurrentMonthView,
+    today,
+    showToast,
+  ]);
+
+  // اختصار لوحة المفاتيح Alt + السهم الأيمن للرجوع السريع في واجهة RTL
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.altKey && e.key === 'ArrowRight') {
+        const tag = (e.target as HTMLElement | null)?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        e.preventDefault();
+        handleGlobalBack();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [handleGlobalBack]);
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors duration-150">
@@ -1369,47 +1648,82 @@ function AuthenticatedWorkspace({
         </div>
       )}
 
-      {/* الهيدر العلوي وفق عقد الـ 3 مناطق مع دعم التنقل المحمي بالأدوار */}
-      <header className="bg-slate-900 dark:bg-slate-950 text-white border-b border-slate-800 px-6 py-3.5 no-print">
+      {/* الهيدر العلوي المثبت مع زر الرجوع للخلف الدائم في جميع الصفحات */}
+      <header className="sticky top-0 z-30 bg-slate-900 dark:bg-slate-950 text-white border-b border-slate-800 px-6 py-3.5 no-print">
         <div className="max-w-[1900px] mx-auto flex flex-wrap items-center justify-between gap-4">
-          {/* المنطقة 1: اسم النظام */}
-          <a
-            href={`#${defaultRoute}`}
-            onClick={(e) => {
-              e.preventDefault();
-              setActiveCasePage(null);
-              setActiveViewTab('grid');
-              navigateToRoute(defaultRoute);
-            }}
-            className="text-lg font-extrabold tracking-tight text-white whitespace-nowrap shrink-0 flex items-center gap-2"
-          >
-            <ShieldCheck className="w-5 h-5 text-indigo-400" />
-            نظام متابعة الشفتات
-          </a>
+          {/* المنطقة 1: زر الرجوع للخلف المخصص + اسم النظام */}
+          <div className="flex items-center gap-3 shrink-0">
+            <button
+              type="button"
+              onClick={handleGlobalBack}
+              className="min-h-[40px] px-3.5 py-2 rounded-lg bg-slate-800 hover:bg-indigo-600 border border-slate-700 hover:border-indigo-500 text-white text-xs font-extrabold flex items-center gap-1.5 transition-colors cursor-pointer"
+              title={
+                hasOpenModal
+                  ? 'رجوع وإغلاق النافذة المفتوحة'
+                  : backTargetHint
+                  ? `رجوع للخلف إلى: ${backTargetHint}`
+                  : 'رجوع للخلف (Alt + السهم الأيمن)'
+              }
+            >
+              <ArrowRight className="w-4 h-4 text-indigo-400 shrink-0" />
+              <span>رجوع للخلف</span>
+              {navHistory.length > 0 && (
+                <span className="px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-200 font-mono text-[10px]">
+                  {navHistory.length}
+                </span>
+              )}
+            </button>
+
+            <a
+              href={`#${defaultRoute}`}
+              onClick={(e) => {
+                e.preventDefault();
+                navigateToRoute(defaultRoute);
+              }}
+              className="text-lg font-extrabold tracking-tight text-white whitespace-nowrap shrink-0 flex items-center gap-2"
+            >
+              <ShieldCheck className="w-5 h-5 text-indigo-400" />
+              نظام متابعة الشفتات
+            </a>
+          </div>
 
           {/* المنطقة 2: روابط التنقل المحمية حسب الدور */}
           <nav className="flex flex-wrap items-center gap-4 sm:gap-5 text-xs sm:text-sm font-medium text-slate-300">
             {navItems.map((item) => {
+              const isSecurityCenterItem = item.route === 'security_center';
               const isActive =
-                activeRoute === item.route && !activeCasePage && activeViewTab === 'grid';
+                (isSecurityCenterItem
+                  ? isSuperAdminInSecurityHub
+                  : activeRoute === item.route) &&
+                !activeCasePage &&
+                activeViewTab === 'grid';
               return (
                 <button
                   key={item.route}
                   type="button"
                   onClick={() => {
-                    setActiveCasePage(null);
-                    setActiveViewTab('grid');
                     navigateToRoute(item.route);
                   }}
-                  className={`hover:text-white transition-colors whitespace-nowrap shrink-0 pb-0.5 flex items-center gap-1.5 ${
-                    isActive
-                      ? 'text-white border-b-2 border-indigo-400 font-bold'
-                      : ''
+                  className={`transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 cursor-pointer ${
+                    isSecurityCenterItem
+                      ? isActive
+                        ? 'px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-extrabold shadow-xs'
+                        : 'px-3 py-1.5 rounded-lg bg-indigo-950/90 hover:bg-indigo-900 border border-indigo-700 text-indigo-200 hover:text-white font-bold'
+                      : isActive
+                      ? 'text-white border-b-2 border-indigo-400 font-bold pb-0.5'
+                      : 'hover:text-white pb-0.5'
                   }`}
                 >
+                  {isSecurityCenterItem && <ShieldCheck className="w-4 h-4 text-indigo-300" />}
                   <span>{item.label}</span>
                   {item.badge !== undefined && (
-                    <span className="px-1.5 py-0.2 rounded bg-amber-500 text-slate-950 text-[10px] font-extrabold font-mono">
+                    <span
+                      className={`px-1.5 py-0.2 rounded text-[10px] font-extrabold font-mono ${
+                        item.badge === 'طوارئ'
+                          ? 'bg-rose-500 text-white'
+                          : 'bg-amber-500 text-slate-950'
+                      }`}
+                    >
                       {item.badge}
                     </span>
                   )}
@@ -1461,6 +1775,110 @@ function AuthenticatedWorkspace({
           </div>
         </div>
       </header>
+
+      {/* شريط التنقل والرجوع للخلف الموحد — يظهر بوضوح في كل صفحة معروضة أمام المستخدم */}
+      <div className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-6 py-2.5 no-print transition-colors duration-150">
+        <div className="max-w-[1900px] mx-auto flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={handleGlobalBack}
+              className={`min-h-[40px] px-4 py-2 rounded-lg font-extrabold flex items-center gap-2 transition-colors cursor-pointer ${
+                backTargetHint || hasOpenModal
+                  ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-2xs'
+                  : 'bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 border border-slate-300 dark:border-slate-700'
+              }`}
+            >
+              <ArrowRight className="w-4 h-4 shrink-0" />
+              <span>رجوع للخلف</span>
+            </button>
+
+            <div className="flex flex-wrap items-center gap-2 text-slate-600 dark:text-slate-300">
+              <span className="text-slate-400 dark:text-slate-500">الصفحة المعروضة:</span>
+              <strong className="font-extrabold text-slate-900 dark:text-white">
+                {!isRouteAuthorized ? 'صفحة محجوبة الصلاحية (403)' : currentPageLabel}
+              </strong>
+              {backTargetHint && (
+                <>
+                  <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">
+                    ·
+                  </span>
+                  <span className="text-slate-500 dark:text-slate-400">
+                    الخطوة السابقة:{' '}
+                    <span className="font-bold text-indigo-700 dark:text-indigo-300">
+                      {backTargetHint}
+                    </span>
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+
+          {!isAtRootHome && (
+            <button
+              type="button"
+              onClick={() => navigateToRoute(defaultRoute)}
+              className="min-h-[38px] px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <Home className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+              <span>الصفحة الرئيسية</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* شريط حالة الطوارئ الأمني (تجميد التعديلات أو قفل النظام) */}
+      {(securityPolicy.systemLockdownMode || securityPolicy.emergencyReadOnlyMode) && (
+        <div
+          className={`px-6 py-2.5 text-xs border-b no-print ${
+            securityPolicy.systemLockdownMode
+              ? 'bg-rose-950 text-rose-100 border-rose-800'
+              : 'bg-amber-950 text-amber-100 border-amber-800'
+          }`}
+        >
+          <div className="max-w-[1900px] mx-auto flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 font-bold">
+              <ShieldAlert className="w-4 h-4 shrink-0" />
+              <span>
+                {securityPolicy.systemLockdownMode
+                  ? 'وضع قفل النظام الشامل (System Lockdown) نشط حالياً — جميع المستخدمين غير Super Admin محجوبون مؤقتاً.'
+                  : 'وضع تجميد التعديلات (Read-Only Freeze) نشط بأمر مدير النظام — التعديلات متوقفة مؤقتاً لغير مدير النظام.'}
+              </span>
+            </div>
+            {currentUser.role === 'super_admin' && (
+              <div className="flex items-center gap-2">
+                {!isSuperAdminInSecurityHub && (
+                  <button
+                    type="button"
+                    onClick={() => navigateToRoute('security_center')}
+                    className="px-3 py-1 rounded bg-white/10 hover:bg-white/20 text-white font-bold"
+                  >
+                    فتح مركز التحكم الأمني
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await saveSecurityPolicySettings({
+                      actor: currentUser,
+                      settings: {
+                        ...securityPolicy,
+                        emergencyReadOnlyMode: false,
+                        systemLockdownMode: false,
+                      },
+                      auditActionLabel: 'إيقاف وضع الطوارئ الأمني من الشريط العلوي',
+                    });
+                    showToast('تم إيقاف وضع الطوارئ واستئناف التشغيل الطبيعي.');
+                  }}
+                  className="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold"
+                >
+                  إيقاف وضع الطوارئ فوراً
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* شريط تنبيه أمني للحسابات الإدارية حول التحقق بخطوتين (MFA) إن كان مفعلاً */}
       {securityPolicy.enforceAdminMfaNotice &&
@@ -1519,7 +1937,29 @@ function AuthenticatedWorkspace({
         <AccessDeniedView
           user={currentUser}
           attemptedRoute={activeRoute}
+          onGoBack={handleGlobalBack}
           onReturnHome={() => navigateToRoute(defaultRoute)}
+        />
+      ) : isSuperAdminInSecurityHub ? (
+        <SuperAdminSecurityHub
+          currentUser={currentUser}
+          securityPolicy={securityPolicy}
+          users={allUsers}
+          invitations={invitations}
+          teams={teams}
+          employees={employees}
+          attendanceRecords={attendanceRecords}
+          auditLogs={auditLogs}
+          initialTab={securityHubTab}
+          activeTabProp={securityHubTab}
+          onTabChange={(nextTab) =>
+            applyNavigation({
+              route: 'security_center',
+              securityTab: nextTab,
+            })
+          }
+          onSendPasswordReset={requestPasswordReset}
+          onNotify={showToast}
         />
       ) : activeRoute === 'users' ? (
         <UserManagementPage
@@ -1744,7 +2184,7 @@ function AuthenticatedWorkspace({
                   {canAccessRoute(currentUser, 'analytics', securityPolicy) && (
                     <button
                       type="button"
-                      onClick={() => setActiveViewTab('analytics')}
+                      onClick={() => applyNavigation({ viewTab: 'analytics' })}
                       className="border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-bold px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap"
                     >
                       <BarChart3 className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
@@ -1894,7 +2334,7 @@ function AuthenticatedWorkspace({
                 <div className="flex flex-wrap items-center gap-1 p-1 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg">
                   <button
                     type="button"
-                    onClick={() => setActiveCasePage('all_shifts')}
+                    onClick={() => applyNavigation({ casePage: 'all_shifts' })}
                     className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors whitespace-nowrap shrink-0 ${
                       activeCasePage === 'all_shifts'
                         ? 'bg-indigo-600 text-white'
@@ -1905,7 +2345,7 @@ function AuthenticatedWorkspace({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setActiveCasePage('selected_not_worked')}
+                    onClick={() => applyNavigation({ casePage: 'selected_not_worked' })}
                     className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors whitespace-nowrap shrink-0 ${
                       activeCasePage === 'selected_not_worked'
                         ? 'bg-rose-600 text-white'
@@ -1916,7 +2356,7 @@ function AuthenticatedWorkspace({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setActiveCasePage('incomplete_schedule')}
+                    onClick={() => applyNavigation({ casePage: 'incomplete_schedule' })}
                     className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors whitespace-nowrap shrink-0 ${
                       activeCasePage === 'incomplete_schedule'
                         ? 'bg-amber-600 text-white'
@@ -1959,7 +2399,9 @@ function AuthenticatedWorkspace({
                       setSearchQuery('');
                       setFilterSelection('all');
                       setFilterAttendance('all');
-                      setActiveCasePage(null);
+                      if (activeCasePage !== null) {
+                        applyNavigation({ casePage: null });
+                      }
                     }}
                     className="text-xs text-indigo-700 dark:text-indigo-400 hover:underline font-bold px-2 py-1 whitespace-nowrap"
                   >
@@ -2025,8 +2467,8 @@ function AuthenticatedWorkspace({
               currentMonth={currentMonth}
               currentYear={currentYear}
               today={today}
-              onBackToGrid={() => setActiveCasePage(null)}
-              onSwitchPage={(page) => setActiveCasePage(page)}
+              onBackToGrid={() => applyNavigation({ casePage: null })}
+              onSwitchPage={(page) => applyNavigation({ casePage: page })}
               onEditCell={(emp, dateStr, rec) => {
                 if (canRecordOrEditAttendance(currentUser, emp, rec, securityPolicy)) {
                   setEditingCell({ employee: emp, date: dateStr, record: rec });
@@ -2377,7 +2819,7 @@ function AuthenticatedWorkspace({
           summaries={summaries}
           currentMonth={currentMonth}
           currentYear={currentYear}
-          onClose={() => setActiveViewTab('grid')}
+          onClose={handleGlobalBack}
         />
       )}
     </div>

@@ -7,12 +7,14 @@ import { recordAuditLog } from '../services/firestoreService';
 interface AccessDeniedViewProps {
   user: UserProfile;
   attemptedRoute: AppRoutePage;
+  onGoBack?: () => void;
   onReturnHome: () => void;
 }
 
 export const AccessDeniedView: React.FC<AccessDeniedViewProps> = ({
   user,
   attemptedRoute,
+  onGoBack,
   onReturnHome,
 }) => {
   const loggedRef = useRef<string>('');
@@ -50,13 +52,22 @@ export const AccessDeniedView: React.FC<AccessDeniedViewProps> = ({
           ، ولا يمتلك الإذن الأمني اللازم لفتح القسم المطلوب (
           <span className="font-mono">{attemptedRoute}</span>). تم تسجيل هذه المحاولة في سجل المراجعة الأمني.
         </p>
-        <div className="pt-2">
+        <div className="pt-2 flex flex-wrap items-center justify-center gap-2.5">
+          {onGoBack && (
+            <button
+              type="button"
+              onClick={onGoBack}
+              className="min-h-[40px] px-5 py-2.5 bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 text-white rounded-lg text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <ArrowRight className="w-4 h-4 text-indigo-400" />
+              رجوع للخلف
+            </button>
+          )}
           <button
             type="button"
             onClick={onReturnHome}
-            className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold inline-flex items-center gap-1.5 transition-colors"
+            className="min-h-[40px] px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
           >
-            <ArrowRight className="w-3.5 h-3.5" />
             العودة إلى صفحتك الرئيسية المصرح بها
           </button>
         </div>

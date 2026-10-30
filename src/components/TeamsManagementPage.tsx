@@ -7,6 +7,7 @@ import {
   ShieldCheck,
   CheckCircle2,
   XCircle,
+  Trash2,
   X,
 } from 'lucide-react';
 import {
@@ -18,6 +19,7 @@ import {
 } from '../types';
 import { hasPermission } from '../utils/rbac';
 import {
+  deleteTeamByAdmin,
   saveTeamRecord,
   transferEmployeeToTeam,
 } from '../services/firestoreService';
@@ -30,6 +32,7 @@ interface TeamsManagementPageProps {
   employees: Employee[];
   attendanceRecords: Record<string, AttendanceRecord>;
   onNotify: (msg: string, type?: 'success' | 'info' | 'warning' | 'error') => void;
+  embedded?: boolean;
 }
 
 export const TeamsManagementPage: React.FC<TeamsManagementPageProps> = ({
@@ -40,6 +43,7 @@ export const TeamsManagementPage: React.FC<TeamsManagementPageProps> = ({
   employees,
   attendanceRecords,
   onNotify,
+  embedded = false,
 }) => {
   const canManageTeams = hasPermission(currentUser, 'teams.manage', securityPolicy);
 
@@ -50,6 +54,7 @@ export const TeamsManagementPage: React.FC<TeamsManagementPageProps> = ({
   const [supervisorIdInput, setSupervisorIdInput] = useState('');
   const [teamStatusInput, setTeamStatusInput] = useState<'active' | 'disabled'>('active');
   const [isSaving, setIsSaving] = useState(false);
+  const [confirmDeleteTeamId, setConfirmDeleteTeamId] = useState<string | null>(null);
 
   const [transferTargetEmp, setTransferTargetEmp] = useState<Employee | null>(null);
   const [destinationTeamId, setDestinationTeamId] = useState('');
@@ -156,8 +161,34 @@ export const TeamsManagementPage: React.FC<TeamsManagementPageProps> = ({
     [employees]
   );
 
+  const handleDeleteTeam = async (team: Team, members: Employee[]) => {
+    if (currentUser.role !== 'super_admin') return;
+    try {
+      await deleteTeamByAdmin({
+        actor: currentUser,
+        team,
+        teamMembers: members,
+      });
+      setConfirmDeleteTeamId(null);
+      onNotify(`تم حذف الفريق "${team.teamName}" وتوثيق العملية في السجل الأمني.`, 'info');
+    } catch (err) {
+      onNotify(
+        err instanceof Error ? err.message : 'تعذر حذف الفريق.',
+        'error'
+      );
+    }
+  };
+
+  const WrapperTag = embedded ? 'div' : 'main';
+
   return (
-    <main className="flex-1 p-4 sm:p-6 max-w-[1900px] w-full mx-auto space-y-5">
+    <WrapperTag
+      className={
+        embedded
+          ? 'space-y-5'
+          : 'flex-1 p-4 sm:p-6 max-w-[1900px] w-full mx-auto space-y-5'
+      }
+    >
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 flex flex-wrap items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 text-indigo-600 dark:text-indigo-400 text-xs font-bold mb-1">
@@ -238,14 +269,44 @@ export const TeamsManagementPage: React.FC<TeamsManagementPageProps> = ({
                       </span>
                     )}
                     {canManageTeams && (
-                      <button
-                        type="button"
-                        onClick={() => openEditTeam(team)}
-                        className="p-1.5 border border-slate-300 dark:border-slate-700 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
-                        title="تعديل الفريق أو تعيين مشرف"
-                      >
-                        <Edit3 className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => openEditTeam(team)}
+                          className="p-1.5 border border-slate-300 dark:border-slate-700 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
+                          title="تعديل الفريق أو تعيين مشرف"
+                        >
+                          <Edit3 className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                        </button>
+                        {currentUser.role === 'super_admin' &&
+                          (confirmDeleteTeamId === team.teamId ? (
+                            <div className="flex items-center gap-1 bg-rose-50 dark:bg-rose-950/60 border border-rose-300 dark:border-rose-800 px-2 py-1 rounded-lg text-[10px]">
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteTeam(team, members)}
+                                className="px-1.5 py-0.5 bg-rose-600 text-white rounded font-bold"
+                              >
+                                حذف
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteTeamId(null)}
+                                className="px-1 py-0.5 text-slate-600 dark:text-slate-300"
+                              >
+                                إلغاء
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteTeamId(team.teamId)}
+                              className="p-1.5 border border-rose-200 dark:border-rose-900/60 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/50 text-rose-600 dark:text-rose-400"
+                              title="حذف الفريق"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          ))}
+                      </>
                     )}
                   </div>
                 </div>
@@ -499,6 +560,6 @@ export const TeamsManagementPage: React.FC<TeamsManagementPageProps> = ({
           </div>
         </div>
       )}
-    </main>
+    </WrapperTag>
   );
 };

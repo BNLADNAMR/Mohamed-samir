@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, UserPlus, Save, Trash2 } from 'lucide-react';
+import { X, UserPlus, Save, Trash2, ArrowRight } from 'lucide-react';
 import { Employee, EmployeeStatus, Team, UserProfile } from '../types';
 import { generateNextUniqueEmployeeCode } from '../utils/shiftCalculations';
 
@@ -99,16 +99,27 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
         className="bg-white dark:bg-slate-900 rounded-xl shadow-xl max-w-md w-full overflow-hidden border border-slate-200 dark:border-slate-800"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="bg-slate-900 dark:bg-slate-950 text-white px-6 py-4 flex items-center justify-between border-b border-slate-800">
-          <div className="flex items-center gap-2">
-            <UserPlus className="w-4 h-4 text-indigo-400" />
-            <h3 className="font-bold text-base">
-              {isSupervisorNotesOnly
-                ? 'تحديث ملاحظات المشرف على المندوب'
-                : editingEmployee
-                ? 'تعديل بيانات المندوب'
-                : 'إضافة مندوب جديد'}
-            </h3>
+        <div className="bg-slate-900 dark:bg-slate-950 text-white px-6 py-4 flex items-center justify-between gap-3 border-b border-slate-800">
+          <div className="flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors shrink-0 cursor-pointer"
+              title="الرجوع للخلف"
+            >
+              <ArrowRight className="w-4 h-4 text-indigo-400" />
+              <span>رجوع للخلف</span>
+            </button>
+            <div className="flex items-center gap-2">
+              <UserPlus className="w-4 h-4 text-indigo-400 shrink-0" />
+              <h3 className="font-bold text-base">
+                {isSupervisorNotesOnly
+                  ? 'تحديث ملاحظات المشرف على المندوب'
+                  : editingEmployee
+                  ? 'تعديل بيانات المندوب'
+                  : 'إضافة مندوب جديد'}
+              </h3>
+            </div>
           </div>
           <button
             type="button"

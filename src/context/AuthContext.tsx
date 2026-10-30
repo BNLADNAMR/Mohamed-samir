@@ -29,7 +29,7 @@ import {
   normalizeEmailToKey,
   validateFirestoreConnection,
 } from '../firebase';
-import { SecurityPolicySettings, UserProfile } from '../types';
+import { PermissionKey, SecurityPolicySettings, UserProfile } from '../types';
 import {
   BOOTSTRAPPED_SUPER_ADMIN_EMAIL,
   DEFAULT_SECURITY_POLICY,
@@ -45,7 +45,8 @@ export type AuthDenyReason =
   | 'disabled'
   | 'pending'
   | 'unverified'
-  | 'session_expired';
+  | 'session_expired'
+  | 'system_lockdown';
 
 interface AuthContextValue {
   firebaseUser: FirebaseUser | null;
@@ -101,6 +102,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const [authError, setAuthError] = useState('');
   const loggedSessionUidRef = useRef<string | null>(null);
   const lastActivityRef = useRef<number>(Date.now());
+  const latestRawProfileRef = useRef<UserProfile | null>(null);
+  const latestPolicyRef = useRef<SecurityPolicySettings>(DEFAULT_SECURITY_POLICY);
 
   useEffect(() => {
     validateFirestoreConnection();
@@ -124,6 +127,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       setFirebaseUser(fbUser);
 
       if (!fbUser) {
+        latestRawProfileRef.current = null;
         setUserProfile(null);
         setIsAuthReady(true);
         loggedSessionUidRef.current = null;
@@ -176,6 +180,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
                 allowViewerExport: true,
                 allowOpsIntegrationSync: false,
                 enforceAdminMfaNotice: true,
+                emergencyReadOnlyMode: false,
+                systemLockdownMode: false,
+                lockdownMessage: DEFAULT_SECURITY_POLICY.lockdownMessage,
+                autoProvisionWithoutInvite: true,
+                autoProvisionDefaultRole: 'viewer',
+                autoProvisionDefaultStatus: 'active',
+                opsGrantedPerms: [],
+                opsRevokedPerms: [],
+                supGrantedPerms: [],
+                supRevokedPerms: [],
+                repGrantedPerms: [],
+                repRevokedPerms: [],
+                viewerGrantedPerms: [],
+                viewerRevokedPerms: [],
                 sessionTimeoutMinutes: 60,
                 externalSyncEndpoint: '',
                 lastExternalSyncStatus: 'جاهز للمزامنة الآمنة',
@@ -187,7 +205,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
               });
             }
           } else {
-            // الحالة 2: التحقق من وجود دعوة حساب معتمدة مسبقاً (إغلاق التسجيل المفتوح)
+            // الحالة 2: التحقق من البريد ثم التخصيص المسبق أو التسجيل التلقائي المباشر بدون دعوة
             if (!fbUser.emailVerified) {
               setDenyReason('unverified');
               setUserProfile(null);
@@ -198,64 +216,115 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
             const invRef = doc(db, 'preprovisionedUsers', emailKey);
             const invSnap = await getDoc(invRef);
 
-            if (!invSnap.exists()) {
-              setDenyReason('uninvited');
-              setUserProfile(null);
-              setIsAuthReady(true);
-              return;
-            }
-
-            const invData = invSnap.data();
-            if (invData.status === 'disabled') {
-              setDenyReason('disabled');
-              setUserProfile(null);
-              setIsAuthReady(true);
-              return;
-            }
-            if (invData.status === 'pending') {
-              setDenyReason('pending');
-              setUserProfile(null);
-              setIsAuthReady(true);
-              return;
-            }
-
-            const invName = String(invData.name || fbUser.displayName || 'مستخدم النظام').trim();
-            const safeName = invName.length >= 2 ? invName.slice(0, 120) : 'مستخدم النظام';
-
-            await setDoc(userRef, {
-              uid: fbUser.uid,
-              name: safeName,
-              email: rawEmail,
-              emailKey,
-              role: invData.role,
-              extraPermissions: Array.isArray(invData.extraPermissions)
-                ? invData.extraPermissions
-                : [],
-              revokedPermissions: Array.isArray(invData.revokedPermissions)
-                ? invData.revokedPermissions
-                : [],
-              employeeId: String(invData.employeeId || ''),
-              teamId: String(invData.teamId || ''),
-              status: 'active',
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-              lastLoginAt: serverTimestamp(),
-            });
-
-            // ربط سجل المندوب تلقائياً بحساب المستخدم عند أول دخول دون إنشاء سجل مكرر
-            if (invData.role === 'delivery_rep' && invData.employeeId) {
-              try {
-                const empRef = doc(db, 'employees', String(invData.employeeId));
-                const empSnap = await getDoc(empRef);
-                if (empSnap.exists() && !empSnap.data().userId) {
-                  await updateDoc(empRef, {
-                    userId: fbUser.uid,
-                    updatedAt: serverTimestamp(),
-                  });
-                }
-              } catch {
-                // الربط قد يكون تم مسبقاً من قبل مدير النظام
+            if (invSnap.exists()) {
+              const invData = invSnap.data();
+              if (invData.status === 'disabled') {
+                setDenyReason('disabled');
+                setUserProfile(null);
+                setIsAuthReady(true);
+                return;
               }
+              if (invData.status === 'pending') {
+                setDenyReason('pending');
+                setUserProfile(null);
+                setIsAuthReady(true);
+                return;
+              }
+
+              const invName = String(invData.name || fbUser.displayName || 'مستخدم النظام').trim();
+              const safeName = invName.length >= 2 ? invName.slice(0, 120) : 'مستخدم النظام';
+
+              await setDoc(userRef, {
+                uid: fbUser.uid,
+                name: safeName,
+                email: rawEmail,
+                emailKey,
+                role: invData.role,
+                extraPermissions: Array.isArray(invData.extraPermissions)
+                  ? invData.extraPermissions
+                  : [],
+                revokedPermissions: Array.isArray(invData.revokedPermissions)
+                  ? invData.revokedPermissions
+                  : [],
+                employeeId: String(invData.employeeId || ''),
+                teamId: String(invData.teamId || ''),
+                status: 'active',
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+                lastLoginAt: serverTimestamp(),
+              });
+
+              // ربط سجل المندوب تلقائياً بحساب المستخدم عند أول دخول دون إنشاء سجل مكرر
+              if (invData.role === 'delivery_rep' && invData.employeeId) {
+                try {
+                  const empRef = doc(db, 'employees', String(invData.employeeId));
+                  const empSnap = await getDoc(empRef);
+                  if (empSnap.exists() && !empSnap.data().userId) {
+                    await updateDoc(empRef, {
+                      userId: fbUser.uid,
+                      updatedAt: serverTimestamp(),
+                    });
+                  }
+                } catch {
+                  // الربط قد يكون تم مسبقاً من قبل مدير النظام
+                }
+              }
+            } else {
+              // التسجيل التلقائي الفوري بدون دعوة مسبقة حتى يتمكن مدير النظام (Super Admin) من تعديل صلاحياته مباشرة
+              const polRef = doc(db, 'securitySettings', 'global');
+              const polSnap = await getDoc(polRef);
+              const polData = polSnap.exists() ? polSnap.data() : null;
+              const autoAllowed =
+                !polData || polData.autoProvisionWithoutInvite !== false;
+
+              if (!autoAllowed) {
+                setDenyReason('uninvited');
+                setUserProfile(null);
+                setIsAuthReady(true);
+                return;
+              }
+
+              const allowedAutoRoles = [
+                'operations_manager',
+                'supervisor',
+                'delivery_rep',
+                'viewer',
+              ];
+              const defaultRole =
+                polData &&
+                typeof polData.autoProvisionDefaultRole === 'string' &&
+                allowedAutoRoles.includes(polData.autoProvisionDefaultRole)
+                  ? polData.autoProvisionDefaultRole
+                  : 'viewer';
+
+              const defaultStatus =
+                polData && polData.autoProvisionDefaultStatus === 'pending'
+                  ? 'pending'
+                  : 'active';
+
+              const rawDisplay = (
+                fbUser.displayName ||
+                rawEmail.split('@')[0] ||
+                'مستخدم النظام'
+              ).trim();
+              const safeName =
+                rawDisplay.length >= 2 ? rawDisplay.slice(0, 120) : 'مستخدم النظام';
+
+              await setDoc(userRef, {
+                uid: fbUser.uid,
+                name: safeName,
+                email: rawEmail,
+                emailKey,
+                role: defaultRole,
+                extraPermissions: [],
+                revokedPermissions: [],
+                employeeId: '',
+                teamId: '',
+                status: defaultStatus,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+                lastLoginAt: serverTimestamp(),
+              });
             }
           }
         }
@@ -272,6 +341,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
             }
 
             const parsed = parseUserProfileDoc(fbUser.uid, docSnap.data());
+            latestRawProfileRef.current = parsed;
+
             if (parsed.status === 'disabled') {
               setDenyReason('disabled');
               setUserProfile(null);
@@ -280,6 +351,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
             }
             if (parsed.status === 'pending') {
               setDenyReason('pending');
+              setUserProfile(null);
+              setIsAuthReady(true);
+              return;
+            }
+            if (
+              latestPolicyRef.current.systemLockdownMode &&
+              parsed.role !== 'super_admin'
+            ) {
+              setDenyReason('system_lockdown');
               setUserProfile(null);
               setIsAuthReady(true);
               return;
@@ -318,19 +398,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           }
         );
 
-        // متابعة لحظية لإعدادات الأمان العامة
+        // متابعة لحظية لإعدادات الأمان العامة وتطبيق أوامر الطوارئ فوراً
         policyUnsubscribe = onSnapshot(
           doc(db, 'securitySettings', 'global'),
           (polSnap) => {
             if (polSnap.exists()) {
               const d = polSnap.data();
-              setSecurityPolicy({
+              const parsePermArr = (val: unknown): PermissionKey[] =>
+                Array.isArray(val) ? (val as PermissionKey[]) : [];
+
+              const nextPolicy: SecurityPolicySettings = {
                 policyId: 'global',
                 allowSupervisorLeaveRecommendation:
                   d.allowSupervisorLeaveRecommendation !== false,
                 allowViewerExport: d.allowViewerExport !== false,
                 allowOpsIntegrationSync: Boolean(d.allowOpsIntegrationSync),
                 enforceAdminMfaNotice: d.enforceAdminMfaNotice !== false,
+                emergencyReadOnlyMode: Boolean(d.emergencyReadOnlyMode),
+                systemLockdownMode: Boolean(d.systemLockdownMode),
+                lockdownMessage: String(
+                  d.lockdownMessage || DEFAULT_SECURITY_POLICY.lockdownMessage
+                ),
+                autoProvisionWithoutInvite: d.autoProvisionWithoutInvite !== false,
+                autoProvisionDefaultRole: (
+                  ['operations_manager', 'supervisor', 'delivery_rep', 'viewer'].includes(
+                    String(d.autoProvisionDefaultRole || '')
+                  )
+                    ? d.autoProvisionDefaultRole
+                    : 'viewer'
+                ) as SecurityPolicySettings['autoProvisionDefaultRole'],
+                autoProvisionDefaultStatus:
+                  d.autoProvisionDefaultStatus === 'pending' ? 'pending' : 'active',
+                opsGrantedPerms: parsePermArr(d.opsGrantedPerms),
+                opsRevokedPerms: parsePermArr(d.opsRevokedPerms),
+                supGrantedPerms: parsePermArr(d.supGrantedPerms),
+                supRevokedPerms: parsePermArr(d.supRevokedPerms),
+                repGrantedPerms: parsePermArr(d.repGrantedPerms),
+                repRevokedPerms: parsePermArr(d.repRevokedPerms),
+                viewerGrantedPerms: parsePermArr(d.viewerGrantedPerms),
+                viewerRevokedPerms: parsePermArr(d.viewerRevokedPerms),
                 sessionTimeoutMinutes: Number(d.sessionTimeoutMinutes) || 60,
                 externalSyncEndpoint: String(d.externalSyncEndpoint || ''),
                 lastExternalSyncStatus: String(
@@ -341,7 +447,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
                 lastExternalSyncTime: String(d.lastExternalSyncTime || '—'),
                 updatedBy: String(d.updatedBy || 'system'),
                 updatedAt: formatFirestoreTimestamp(d.updatedAt),
-              });
+              };
+
+              latestPolicyRef.current = nextPolicy;
+              setSecurityPolicy(nextPolicy);
+
+              const activeRaw = latestRawProfileRef.current;
+              if (activeRaw && activeRaw.status === 'active') {
+                if (
+                  nextPolicy.systemLockdownMode &&
+                  activeRaw.role !== 'super_admin'
+                ) {
+                  setDenyReason('system_lockdown');
+                  setUserProfile(null);
+                } else if (!nextPolicy.systemLockdownMode) {
+                  setDenyReason((prev) =>
+                    prev === 'system_lockdown' ? null : prev
+                  );
+                  setUserProfile(activeRaw);
+                }
+              }
             }
           },
           () => {

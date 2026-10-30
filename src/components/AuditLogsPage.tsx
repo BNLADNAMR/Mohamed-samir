@@ -22,6 +22,7 @@ interface AuditLogsPageProps {
   securityPolicy: SecurityPolicySettings;
   logs: AuditLogItem[];
   onNotify: (msg: string, type?: 'success' | 'info' | 'warning' | 'error') => void;
+  embedded?: boolean;
 }
 
 export const AuditLogsPage: React.FC<AuditLogsPageProps> = ({
@@ -29,6 +30,7 @@ export const AuditLogsPage: React.FC<AuditLogsPageProps> = ({
   securityPolicy,
   logs,
   onNotify,
+  embedded = false,
 }) => {
   const canExport = hasPermission(currentUser, 'audit.export', securityPolicy);
 
@@ -107,8 +109,16 @@ export const AuditLogsPage: React.FC<AuditLogsPageProps> = ({
     onNotify('تم تصدير سجل العمليات الأمنية (CSV) بنجاح.');
   };
 
+  const WrapperTag = embedded ? 'div' : 'main';
+
   return (
-    <main className="flex-1 p-4 sm:p-6 max-w-[1900px] w-full mx-auto space-y-5">
+    <WrapperTag
+      className={
+        embedded
+          ? 'space-y-5'
+          : 'flex-1 p-4 sm:p-6 max-w-[1900px] w-full mx-auto space-y-5'
+      }
+    >
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 flex flex-wrap items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 text-indigo-600 dark:text-indigo-400 text-xs font-bold mb-1">
@@ -294,6 +304,6 @@ export const AuditLogsPage: React.FC<AuditLogsPageProps> = ({
           </tbody>
         </table>
       </div>
-    </main>
+    </WrapperTag>
   );
 };

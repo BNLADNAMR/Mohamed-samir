@@ -84,6 +84,41 @@ service cloud.firestore {
       return arr is list && arr.size() <= maxLen && (arr.size() == 0 || (arr[0] is string && arr[0].size() <= 64));
     }
 
+    function securityPolicyDocPath() {
+      return /databases/$(database)/documents/securitySettings/global;
+    }
+
+    // يسمح بالكتابة لغير مدير النظام فقط إذا لم يفعّل مدير النظام وضع الطوارئ (تجميد التعديلات أو قفل النظام)
+    function isNonAdminWriteUnlocked() {
+      return !exists(securityPolicyDocPath()) || (
+        (!('emergencyReadOnlyMode' in get(securityPolicyDocPath()).data) || get(securityPolicyDocPath()).data.emergencyReadOnlyMode == false) &&
+        (!('systemLockdownMode' in get(securityPolicyDocPath()).data) || get(securityPolicyDocPath()).data.systemLockdownMode == false)
+      );
+    }
+
+    // التسجيل التلقائي بدون دعوة مسبقة (بإشراف وتحكم مدير النظام ودون أي إمكانية لتصعيد الصلاحيات إلى super_admin)
+    function isAutoProvisionAllowed() {
+      return !exists(securityPolicyDocPath()) ||
+        !('autoProvisionWithoutInvite' in get(securityPolicyDocPath()).data) ||
+        get(securityPolicyDocPath()).data.autoProvisionWithoutInvite == true;
+    }
+
+    function expectedAutoProvisionRole() {
+      return (exists(securityPolicyDocPath()) &&
+        'autoProvisionDefaultRole' in get(securityPolicyDocPath()).data &&
+        get(securityPolicyDocPath()).data.autoProvisionDefaultRole in ['operations_manager', 'supervisor', 'delivery_rep', 'viewer'])
+        ? get(securityPolicyDocPath()).data.autoProvisionDefaultRole
+        : 'viewer';
+    }
+
+    function expectedAutoProvisionStatus() {
+      return (exists(securityPolicyDocPath()) &&
+        'autoProvisionDefaultStatus' in get(securityPolicyDocPath()).data &&
+        get(securityPolicyDocPath()).data.autoProvisionDefaultStatus in ['active', 'pending'])
+        ? get(securityPolicyDocPath()).data.autoProvisionDefaultStatus
+        : 'active';
+    }
+
     // ---------------------------------------------------------
     // Entity Schema Validation Blueprints (Anti-Update-Gap)
     // ---------------------------------------------------------
@@ -273,7 +308,12 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'policyId', 'allowSupervisorLeaveRecommendation', 'allowViewerExport',
-          'allowOpsIntegrationSync', 'enforceAdminMfaNotice', 'sessionTimeoutMinutes',
+          'allowOpsIntegrationSync', 'enforceAdminMfaNotice', 'emergencyReadOnlyMode',
+          'systemLockdownMode', 'lockdownMessage', 'autoProvisionWithoutInvite',
+          'autoProvisionDefaultRole', 'autoProvisionDefaultStatus',
+          'opsGrantedPerms', 'opsRevokedPerms',
+          'supGrantedPerms', 'supRevokedPerms', 'repGrantedPerms', 'repRevokedPerms',
+          'viewerGrantedPerms', 'viewerRevokedPerms', 'sessionTimeoutMinutes',
           'externalSyncEndpoint', 'lastExternalSyncStatus', 'lastExternalSyncImported',
           'lastExternalSyncFailed', 'lastExternalSyncTime', 'updatedBy', 'updatedAt'
         ]) &&
@@ -282,6 +322,20 @@ service cloud.firestore {
         data.allowViewerExport is bool &&
         data.allowOpsIntegrationSync is bool &&
         data.enforceAdminMfaNotice is bool &&
+        (!('emergencyReadOnlyMode' in data) || data.emergencyReadOnlyMode is bool) &&
+        (!('systemLockdownMode' in data) || data.systemLockdownMode is bool) &&
+        (!('lockdownMessage' in data) || (data.lockdownMessage is string && data.lockdownMessage.size() <= 300)) &&
+        (!('autoProvisionWithoutInvite' in data) || data.autoProvisionWithoutInvite is bool) &&
+        (!('autoProvisionDefaultRole' in data) || data.autoProvisionDefaultRole in ['operations_manager', 'supervisor', 'delivery_rep', 'viewer']) &&
+        (!('autoProvisionDefaultStatus' in data) || data.autoProvisionDefaultStatus in ['active', 'pending']) &&
+        (!('opsGrantedPerms' in data) || isBoundedStringArray(data.opsGrantedPerms, 40)) &&
+        (!('opsRevokedPerms' in data) || isBoundedStringArray(data.opsRevokedPerms, 40)) &&
+        (!('supGrantedPerms' in data) || isBoundedStringArray(data.supGrantedPerms, 40)) &&
+        (!('supRevokedPerms' in data) || isBoundedStringArray(data.supRevokedPerms, 40)) &&
+        (!('repGrantedPerms' in data) || isBoundedStringArray(data.repGrantedPerms, 40)) &&
+        (!('repRevokedPerms' in data) || isBoundedStringArray(data.repRevokedPerms, 40)) &&
+        (!('viewerGrantedPerms' in data) || isBoundedStringArray(data.viewerGrantedPerms, 40)) &&
+        (!('viewerRevokedPerms' in data) || isBoundedStringArray(data.viewerRevokedPerms, 40)) &&
         data.sessionTimeoutMinutes is int && data.sessionTimeoutMinutes >= 5 && data.sessionTimeoutMinutes <= 1440 &&
         data.externalSyncEndpoint is string && data.externalSyncEndpoint.size() <= 300 &&
         data.lastExternalSyncStatus is string && data.lastExternalSyncStatus.size() <= 100 &&
@@ -323,10 +377,11 @@ service cloud.firestore {
         isOperationsManager()
       );
 
-      // Closed Registration:
+      // Controlled Registration:
       // 1) Bootstrapped Super Admin claiming own account, OR
-      // 2) Pre-provisioned invited user claiming exact pre-approved role & scope, OR
-      // 3) Active Super Admin creating a user record directly
+      // 2) Pre-provisioned account claiming exact pre-assigned role & scope, OR
+      // 3) Verified user auto-registering WITHOUT invitation when Super Admin enables autoProvisionWithoutInvite (strictly bounded to non-admin default role), OR
+      // 4) Active Super Admin creating a user record directly
       allow create: if isVerifiedUser() &&
         isValidId(userId) &&
         isValidUserAccount(incoming()) &&
@@ -343,6 +398,20 @@ service cloud.firestore {
           (
             request.auth.uid == userId &&
             matchesPreprovisionedInvitation(incoming())
+          ) ||
+          (
+            request.auth.uid == userId &&
+            incoming().emailKey == request.auth.token.email.lower().replace('[^a-z0-9]', '_') &&
+            !exists(invitationDocPath(incoming().emailKey)) &&
+            isAutoProvisionAllowed() &&
+            incoming().email == request.auth.token.email &&
+            incoming().role == expectedAutoProvisionRole() &&
+            incoming().role != 'super_admin' &&
+            incoming().status == expectedAutoProvisionStatus() &&
+            incoming().extraPermissions.size() == 0 &&
+            incoming().revokedPermissions.size() == 0 &&
+            incoming().employeeId == '' &&
+            incoming().teamId == ''
           ) ||
           isSuperAdmin()
         );
@@ -490,7 +559,7 @@ service cloud.firestore {
         incoming().id == employeeId &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time &&
-        (isSuperAdmin() || isOperationsManager());
+        (isSuperAdmin() || (isOperationsManager() && isNonAdminWriteUnlocked()));
 
       allow update: if isVerifiedUser() &&
         isValidId(employeeId) &&
@@ -500,7 +569,7 @@ service cloud.firestore {
         incoming().updatedAt == request.time && (
           // Tier 1: Super Admin & Operations Manager
           (
-            (isSuperAdmin() || isOperationsManager()) &&
+            (isSuperAdmin() || (isOperationsManager() && isNonAdminWriteUnlocked())) &&
             incoming().diff(existing()).affectedKeys().hasOnly([
               'employeeCode', 'fullName', 'phone', 'hireDate', 'status',
               'externalId', 'teamId', 'userId', 'notes', 'updatedAt'
@@ -509,6 +578,7 @@ service cloud.firestore {
           // Tier 2: Supervisor updating notes on own team employee
           (
             isSupervisor() &&
+            isNonAdminWriteUnlocked() &&
             existing().teamId == currentUserData().teamId &&
             incoming().teamId == existing().teamId &&
             incoming().diff(existing()).affectedKeys().hasOnly(['notes', 'updatedAt'])
@@ -516,6 +586,7 @@ service cloud.firestore {
           // Tier 3: Invited Delivery Rep linking own userId on first login if not yet linked
           (
             isDeliveryRep() &&
+            isNonAdminWriteUnlocked() &&
             employeeId == currentUserData().employeeId &&
             existing().userId == '' &&
             incoming().userId == request.auth.uid &&
@@ -555,8 +626,10 @@ service cloud.firestore {
         incoming().updatedAt == request.time &&
         exists(/databases/$(database)/documents/employees/$(incoming().employeeId)) && (
           isSuperAdmin() ||
-          isOperationsManager() ||
-          (isSupervisor() && incoming().teamId == currentUserData().teamId && incoming().source == 'manual')
+          (isNonAdminWriteUnlocked() && (
+            isOperationsManager() ||
+            (isSupervisor() && incoming().teamId == currentUserData().teamId && incoming().source == 'manual')
+          ))
         );
 
       allow update: if isVerifiedUser() &&
@@ -569,7 +642,7 @@ service cloud.firestore {
         incoming().recordedBy == request.auth.uid &&
         incoming().updatedAt == request.time && (
           (
-            (isSuperAdmin() || isOperationsManager()) &&
+            (isSuperAdmin() || (isOperationsManager() && isNonAdminWriteUnlocked())) &&
             incoming().diff(existing()).affectedKeys().hasOnly([
               'teamId', 'shiftSelection', 'attendance', 'startTime', 'endTime',
               'breakMinutes', 'totalWorkedMinutes', 'supervisorNotes', 'source',
@@ -578,6 +651,7 @@ service cloud.firestore {
           ) ||
           (
             isSupervisor() &&
+            isNonAdminWriteUnlocked() &&
             existing().teamId == currentUserData().teamId &&
             incoming().teamId == existing().teamId &&
             existing().source != 'external_sync' &&
@@ -591,7 +665,7 @@ service cloud.firestore {
 
       allow delete: if isVerifiedUser() &&
         isValidId(recordId) &&
-        (isSuperAdmin() || isOperationsManager());
+        (isSuperAdmin() || (isOperationsManager() && isNonAdminWriteUnlocked()));
     }
 
     // ---------------------------------------------------------
@@ -623,9 +697,11 @@ service cloud.firestore {
         incoming().updatedAt == request.time &&
         exists(/databases/$(database)/documents/employees/$(incoming().employeeId)) && (
           isSuperAdmin() ||
-          isOperationsManager() ||
-          (isSupervisor() && incoming().teamId == currentUserData().teamId && incoming().submitterRole == 'supervisor') ||
-          (isDeliveryRep() && incoming().employeeId == currentUserData().employeeId && incoming().submitterRole == 'delivery_rep')
+          (isNonAdminWriteUnlocked() && (
+            isOperationsManager() ||
+            (isSupervisor() && incoming().teamId == currentUserData().teamId && incoming().submitterRole == 'supervisor') ||
+            (isDeliveryRep() && incoming().employeeId == currentUserData().employeeId && incoming().submitterRole == 'delivery_rep')
+          ))
         );
 
       allow update: if isVerifiedUser() &&
@@ -641,6 +717,7 @@ service cloud.firestore {
         incoming().updatedAt == request.time && (
           isSuperAdmin() ||
           (
+            isNonAdminWriteUnlocked() &&
             existing().status in ['pending', 'recommended'] && (
               (
                 isSupervisor() &&
@@ -697,7 +774,10 @@ service cloud.firestore {
     // Collection 8: /securitySettings/{policyId}
     // ---------------------------------------------------------
     match /securitySettings/{policyId} {
-      allow get: if isSignedIn() && isValidId(policyId) && hasActiveProfile();
+      allow get: if isSignedIn() && isValidId(policyId) && (
+        hasActiveProfile() ||
+        (isVerifiedUser() && policyId == 'global')
+      );
       allow list: if isSignedIn() && isSuperAdmin();
 
       allow create: if isVerifiedUser() &&
@@ -717,9 +797,14 @@ service cloud.firestore {
         isSuperAdmin() &&
         incoming().diff(existing()).affectedKeys().hasOnly([
           'allowSupervisorLeaveRecommendation', 'allowViewerExport',
-          'allowOpsIntegrationSync', 'enforceAdminMfaNotice', 'sessionTimeoutMinutes',
-          'externalSyncEndpoint', 'lastExternalSyncStatus', 'lastExternalSyncImported',
-          'lastExternalSyncFailed', 'lastExternalSyncTime', 'updatedBy', 'updatedAt'
+          'allowOpsIntegrationSync', 'enforceAdminMfaNotice',
+          'emergencyReadOnlyMode', 'systemLockdownMode', 'lockdownMessage',
+          'autoProvisionWithoutInvite', 'autoProvisionDefaultRole', 'autoProvisionDefaultStatus',
+          'opsGrantedPerms', 'opsRevokedPerms', 'supGrantedPerms', 'supRevokedPerms',
+          'repGrantedPerms', 'repRevokedPerms', 'viewerGrantedPerms', 'viewerRevokedPerms',
+          'sessionTimeoutMinutes', 'externalSyncEndpoint', 'lastExternalSyncStatus',
+          'lastExternalSyncImported', 'lastExternalSyncFailed', 'lastExternalSyncTime',
+          'updatedBy', 'updatedAt'
         ]);
 
       allow delete: if false;

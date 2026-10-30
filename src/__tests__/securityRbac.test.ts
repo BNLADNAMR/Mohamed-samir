@@ -270,4 +270,105 @@ describe('اختبارات الأمان والصلاحيات الإلزامية 
     expect(auditSection).toContain('allow update: if false;');
     expect(auditSection).toContain('allow delete: if false;');
   });
+
+  it('16. مركز التحكم الأمني الشامل (#security_center) حصري تماماً لحساب Super Admin فقط', () => {
+    const admin = makeUser({ uid: 'uid_admin', role: 'super_admin' });
+    const ops = makeUser({ uid: 'uid_ops', role: 'operations_manager' });
+    const sup = makeUser({ uid: 'uid_sup', role: 'supervisor', teamId: 'TEAM_A' });
+    const rep = makeUser({ uid: 'uid_rep', role: 'delivery_rep', employeeId: 'EMP001' });
+    const viewer = makeUser({ uid: 'uid_v', role: 'viewer' });
+
+    expect(canAccessRoute(admin, 'security_center')).toBe(true);
+    expect(canAccessRoute(ops, 'security_center')).toBe(false);
+    expect(canAccessRoute(sup, 'security_center')).toBe(false);
+    expect(canAccessRoute(rep, 'security_center')).toBe(false);
+    expect(canAccessRoute(viewer, 'security_center')).toBe(false);
+  });
+
+  it('17. تعديل مصفوفة الصلاحيات من قبل Super Admin يطبق فوراً على الأدوار دون تجاوز سقف الأمان', () => {
+    const ops = makeUser({ uid: 'uid_ops', role: 'operations_manager' });
+    const sup = makeUser({ uid: 'uid_sup', role: 'supervisor', teamId: 'TEAM_A' });
+
+    const customPolicy = {
+      ...DEFAULT_SECURITY_POLICY,
+      opsGrantedPerms: ['teams.manage', 'users.create'] as typeof DEFAULT_SECURITY_POLICY.opsGrantedPerms,
+      supRevokedPerms: ['attendance.record'] as typeof DEFAULT_SECURITY_POLICY.supRevokedPerms,
+    };
+
+    // teams.manage مسموح منحها لمدير التشغيل، بينما users.create محجوبة حصرياً لمدير النظام
+    expect(hasPermission(ops, 'teams.manage', customPolicy)).toBe(true);
+    expect(hasPermission(ops, 'users.create', customPolicy)).toBe(false);
+    // سحب attendance.record من دور المشرف يوقف تعديله للحضور فوراً
+    expect(hasPermission(sup, 'attendance.record', customPolicy)).toBe(false);
+    expect(canRecordOrEditAttendance(sup, empTeamA, undefined, customPolicy)).toBe(false);
+  });
+
+  it('18. وضع تجميد التعديلات الطارئ (emergencyReadOnlyMode) يجمد كتابة غير مدير النظام في الواجهة و Firestore مع بقاء Super Admin كامل الصلاحية', () => {
+    const admin = makeUser({ uid: 'uid_admin', role: 'super_admin' });
+    const ops = makeUser({ uid: 'uid_ops', role: 'operations_manager' });
+    const freezePolicy = {
+      ...DEFAULT_SECURITY_POLICY,
+      emergencyReadOnlyMode: true,
+    };
+
+    expect(resolveEffectivePermissions(admin, freezePolicy).size).toBe(34);
+    expect(hasPermission(ops, 'employees.view_all', freezePolicy)).toBe(true);
+    expect(hasPermission(ops, 'employees.edit', freezePolicy)).toBe(false);
+    expect(hasPermission(ops, 'attendance.edit', freezePolicy)).toBe(false);
+    expect(canRecordOrEditAttendance(ops, empTeamA, undefined, freezePolicy)).toBe(false);
+    expect(rulesText).toContain('isNonAdminWriteUnlocked()');
+  });
+
+  it('19. وضع قفل النظام المؤقت (systemLockdownMode) يحجب جميع الأدوار الأخرى مع بقاء حساب Super Admin نشطاً بالكامل', () => {
+    const admin = makeUser({ uid: 'uid_admin', role: 'super_admin' });
+    const ops = makeUser({ uid: 'uid_ops', role: 'operations_manager' });
+    const lockdownPolicy = {
+      ...DEFAULT_SECURITY_POLICY,
+      systemLockdownMode: true,
+    };
+
+    expect(canAccessRoute(admin, 'security_center', lockdownPolicy)).toBe(true);
+    expect(canAccessRoute(admin, 'dashboard', lockdownPolicy)).toBe(true);
+    expect(canAccessRoute(ops, 'dashboard', lockdownPolicy)).toBe(false);
+    expect(resolveEffectivePermissions(ops, lockdownPolicy).size).toBe(0);
+  });
+
+  it('20. التسجيل التلقائي بدون دعوة (autoProvisionWithoutInvite) مفعل افتراضياً بدور آمن ومقيد ضد تصعيد الصلاحيات في Firestore Rules', () => {
+    expect(DEFAULT_SECURITY_POLICY.autoProvisionWithoutInvite).toBe(true);
+    expect(DEFAULT_SECURITY_POLICY.autoProvisionDefaultRole).toBe('viewer');
+    expect(DEFAULT_SECURITY_POLICY.autoProvisionDefaultStatus).toBe('active');
+    expect(rulesText).toContain('isAutoProvisionAllowed()');
+    expect(rulesText).toContain('incoming().role == expectedAutoProvisionRole()');
+    expect(rulesText).toContain("incoming().role != 'super_admin'");
+    expect(rulesText).toContain(
+      "incoming().emailKey == request.auth.token.email.lower().replace('[^a-z0-9]', '_')"
+    );
+  });
+
+  it('21. يستطيع Super Admin تعديل دور وصلاحيات أي مستخدم تلقائياً وبأثر فوري دون الحاجة لدعوة', () => {
+    // مستخدم دخل تلقائياً بدور مراقب (viewer) بدون دعوة
+    const autoUser = makeUser({
+      uid: 'uid_auto_1',
+      role: 'viewer',
+      extraPermissions: [],
+      revokedPermissions: [],
+    });
+    expect(hasPermission(autoUser, 'attendance.record')).toBe(false);
+
+    // بعد التغيير التلقائي الفوري من Super Admin إلى مشرف مع منحه صلاحية إضافية وسحب أخرى
+    const updatedAutoUser: UserProfile = {
+      ...autoUser,
+      role: 'supervisor',
+      teamId: 'TEAM_A',
+      extraPermissions: ['reports.export'],
+      revokedPermissions: ['leave.review'],
+    };
+
+    expect(hasPermission(updatedAutoUser, 'attendance.record')).toBe(true);
+    expect(hasPermission(updatedAutoUser, 'reports.export')).toBe(true);
+    expect(hasPermission(updatedAutoUser, 'leave.review')).toBe(false);
+    expect(canViewEmployee(updatedAutoUser, empTeamA)).toBe(true);
+    expect(canViewEmployee(updatedAutoUser, empTeamB)).toBe(false);
+  });
 });
+

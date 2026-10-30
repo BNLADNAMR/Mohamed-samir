@@ -70,16 +70,13 @@ export const SecuritySettingsPage: React.FC<SecuritySettingsPageProps> = ({
       await saveSecurityPolicySettings({
         actor: currentUser,
         settings: {
+          ...securityPolicy,
           allowSupervisorLeaveRecommendation: allowSupLeaveRec,
           allowViewerExport,
           allowOpsIntegrationSync,
           enforceAdminMfaNotice,
           sessionTimeoutMinutes,
           externalSyncEndpoint,
-          lastExternalSyncStatus: securityPolicy.lastExternalSyncStatus,
-          lastExternalSyncImported: securityPolicy.lastExternalSyncImported,
-          lastExternalSyncFailed: securityPolicy.lastExternalSyncFailed,
-          lastExternalSyncTime: securityPolicy.lastExternalSyncTime,
         },
       });
       onNotify('تم حفظ سياسات الأمان وإعدادات الربط بنجاح وتوثيقها في السجل الأمني.');

@@ -8,6 +8,7 @@ import {
   KeyRound,
   Sun,
   Moon,
+  ArrowRight,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -22,6 +23,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 }) => {
   const {
     firebaseUser,
+    securityPolicy,
     isBusy,
     denyReason,
     authError,
@@ -61,21 +63,59 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     }
   };
 
+  const hasAuthSubState =
+    showEmailForm ||
+    Boolean(firebaseUser) ||
+    Boolean(authError) ||
+    Boolean(resetStatus);
+
+  const handleAuthBack = async () => {
+    if (showEmailForm) {
+      setShowEmailForm(false);
+      setResetStatus(null);
+      clearAuthError();
+      return;
+    }
+    if (resetStatus || authError) {
+      setResetStatus(null);
+      clearAuthError();
+      return;
+    }
+    if (firebaseUser) {
+      await logout();
+      return;
+    }
+    if (typeof window !== 'undefined' && window.location.hash) {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+  };
+
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors duration-150">
-      {/* شريط علوي متسق مع هوية التطبيق */}
-      <header className="bg-slate-900 dark:bg-slate-950 text-white border-b border-slate-800 px-6 py-3.5">
-        <div className="max-w-[1400px] mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <ShieldCheck className="w-5 h-5 text-indigo-400" />
-            <span className="text-base font-extrabold tracking-tight">
-              نظام متابعة الشفتات وأداء المندوبين
-            </span>
+      {/* شريط علوي متسق مع هوية التطبيق وزر الرجوع للخلف */}
+      <header className="sticky top-0 z-30 bg-slate-900 dark:bg-slate-950 text-white border-b border-slate-800 px-6 py-3.5">
+        <div className="max-w-[1400px] mx-auto flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={handleAuthBack}
+              className="min-h-[40px] px-3.5 py-2 rounded-lg bg-slate-800 hover:bg-indigo-600 border border-slate-700 hover:border-indigo-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="الرجوع للخلف"
+            >
+              <ArrowRight className="w-4 h-4 text-indigo-400" />
+              <span>رجوع للخلف</span>
+            </button>
+            <div className="flex items-center gap-2.5">
+              <ShieldCheck className="w-5 h-5 text-indigo-400" />
+              <span className="text-base font-extrabold tracking-tight">
+                نظام متابعة الشفتات وأداء المندوبين
+              </span>
+            </div>
           </div>
           <button
             type="button"
             onClick={onToggleDarkMode}
-            className="border border-slate-700 hover:bg-slate-800 text-slate-200 text-xs font-bold px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5"
+            className="min-h-[40px] border border-slate-700 hover:bg-slate-800 text-slate-200 text-xs font-bold px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5"
           >
             {isDarkMode ? (
               <>
@@ -101,11 +141,26 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
             </div>
             <h1 className="text-lg font-extrabold">تسجيل الدخول إلى النظام</h1>
             <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-              الوصول مقصور على الحسابات المعتمدة مسبقاً من قبل إدارة النظام وفق الصلاحيات ونطاق الفريق المحدد لكل مستخدم.
+              سجّل دخولك مباشرة بحساب Google الموثق دون الحاجة إلى دعوة مسبقة، وتُضبط صلاحياتك ونطاق فريقك تلقائياً وبشكل فوري بواسطة مدير النظام.
             </p>
           </div>
 
           <div className="p-6 space-y-4 text-xs">
+            {hasAuthSubState && (
+              <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={handleAuthBack}
+                  className="px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <ArrowRight className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                  <span>رجوع للخلف</span>
+                </button>
+                <span className="text-[11px] text-slate-400">
+                  العودة لشاشة الدخول الرئيسية
+                </span>
+              </div>
+            )}
             {/* رسائل منع الوصول للحسابات غير المصرح بها أو المعطلة */}
             {denyReason === 'uninvited' && firebaseUser && (
               <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-900 text-rose-900 dark:text-rose-200 space-y-2.5">
@@ -188,6 +243,29 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                     className="w-full py-2 px-3 bg-slate-800 text-white rounded-lg font-bold"
                   >
                     تسجيل الخروج
+                  </button>
+                )}
+              </div>
+            )}
+
+            {denyReason === 'system_lockdown' && (
+              <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-800 text-amber-950 dark:text-amber-200 space-y-2.5">
+                <div className="flex items-center gap-2 font-bold text-sm">
+                  <Lock className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                  وضع القفل الأمني المؤقت نشط (System Lockdown)
+                </div>
+                <p className="leading-relaxed">
+                  {securityPolicy.lockdownMessage ||
+                    'النظام مغلق مؤقتاً لغير مدير النظام (Super Admin) لإجراء مراجعة أمنية.'}
+                </p>
+                {firebaseUser && (
+                  <button
+                    type="button"
+                    onClick={logout}
+                    className="w-full py-2 px-3 bg-slate-900 hover:bg-slate-800 text-white rounded-lg font-bold flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    تسجيل الخروج أو الدخول بحساب مدير النظام (Super Admin)
                   </button>
                 )}
               </div>

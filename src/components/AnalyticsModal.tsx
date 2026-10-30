@@ -1,5 +1,5 @@
 import React, { useMemo, useEffect } from 'react';
-import { X, Award, AlertTriangle } from 'lucide-react';
+import { X, Award, AlertTriangle, ArrowRight } from 'lucide-react';
 import { Employee, EmployeeSummary } from '../types';
 import { MONTH_NAMES } from '../utils/shiftCalculations';
 
@@ -91,10 +91,21 @@ export const AnalyticsModal: React.FC<AnalyticsModalProps> = ({
         className="bg-white dark:bg-slate-900 rounded-xl shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto border border-slate-200 dark:border-slate-800 text-xs"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="bg-slate-900 dark:bg-slate-950 text-white px-6 py-4 flex items-center justify-between sticky top-0 z-10 border-b border-slate-800">
-          <h3 className="font-bold text-base">
-            تقرير ملخص الأداء والالتزام — {MONTH_NAMES[currentMonth - 1]} {currentYear}
-          </h3>
+        <div className="bg-slate-900 dark:bg-slate-950 text-white px-6 py-4 flex flex-wrap items-center justify-between gap-3 sticky top-0 z-10 border-b border-slate-800">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="الرجوع للخلف"
+            >
+              <ArrowRight className="w-4 h-4 text-indigo-400" />
+              <span>رجوع للخلف</span>
+            </button>
+            <h3 className="font-bold text-base">
+              تقرير ملخص الأداء والالتزام — {MONTH_NAMES[currentMonth - 1]} {currentYear}
+            </h3>
+          </div>
           <button
             type="button"
             onClick={onClose}

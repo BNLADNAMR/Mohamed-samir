@@ -147,12 +147,47 @@ const READ_ONLY_OR_REP_BLOCKED_PERMISSIONS: Set<PermissionKey> = new Set([
   'integration.manage',
 ]);
 
+export const WRITE_ACTION_PERMISSIONS: Set<PermissionKey> = new Set([
+  'users.create',
+  'users.edit',
+  'users.disable',
+  'users.assign_role',
+  'employees.create',
+  'employees.edit',
+  'employees.delete',
+  'shifts.edit',
+  'shifts.approve',
+  'attendance.record',
+  'attendance.edit',
+  'attendance.approve_correction',
+  'leave.request',
+  'leave.review',
+  'leave.approve',
+  'teams.manage',
+  'settings.manage',
+  'integration.manage',
+]);
+
 export const DEFAULT_SECURITY_POLICY: SecurityPolicySettings = {
   policyId: 'global',
   allowSupervisorLeaveRecommendation: true,
   allowViewerExport: true,
   allowOpsIntegrationSync: false,
   enforceAdminMfaNotice: true,
+  emergencyReadOnlyMode: false,
+  systemLockdownMode: false,
+  lockdownMessage: 'النظام في وضع الصيانة الأمنية المؤقتة بأمر من مدير النظام. يرجى المحاولة لاحقاً.',
+  autoProvisionWithoutInvite: true,
+  autoProvisionDefaultRole: 'viewer',
+  autoProvisionDefaultStatus: 'active',
+  opsGrantedPerms: [],
+  opsRevokedPerms: [],
+  supGrantedPerms: [],
+  supRevokedPerms: [],
+  repGrantedPerms: [],
+  repRevokedPerms: [],
+  viewerGrantedPerms: [],
+  viewerRevokedPerms: [],
   sessionTimeoutMinutes: 60,
   externalSyncEndpoint: '',
   lastExternalSyncStatus: 'جاهز للمزامنة الآمنة',
@@ -163,8 +198,23 @@ export const DEFAULT_SECURITY_POLICY: SecurityPolicySettings = {
   updatedAt: new Date().toISOString(),
 };
 
+export function isPermissionCustomizableForRole(
+  role: UserRole,
+  perm: PermissionKey
+): boolean {
+  if (role === 'super_admin') return false;
+  if (SUPER_ADMIN_EXCLUSIVE_PERMISSIONS.has(perm)) return false;
+  if (
+    (role === 'viewer' || role === 'delivery_rep') &&
+    READ_ONLY_OR_REP_BLOCKED_PERMISSIONS.has(perm)
+  ) {
+    return false;
+  }
+  return true;
+}
+
 /**
- * حساب الصلاحيات الفعلية للمستخدم مع دمج السياسات الأمنية وعدم السماح بتجاوز السقف الأمني لكل دور
+ * حساب الصلاحيات الفعلية للمستخدم مع دمج تحكم مدير النظام الديناميكي ووضع الطوارئ وعدم السماح بتجاوز السقف الأمني
  */
 export function resolveEffectivePermissions(
   user: UserProfile | null,
@@ -178,6 +228,10 @@ export function resolveEffectivePermissions(
     return new Set(DEFAULT_ROLE_PERMISSIONS.super_admin);
   }
 
+  if (policy.systemLockdownMode) {
+    return new Set();
+  }
+
   const effective = new Set<PermissionKey>(DEFAULT_ROLE_PERMISSIONS[user.role] || []);
 
   // تطبيق سياسات مدير النظام الديناميكية
@@ -186,26 +240,52 @@ export function resolveEffectivePermissions(
   }
   if (user.role === 'viewer' && policy.allowViewerExport) {
     effective.add('reports.export');
+  } else if (user.role === 'viewer' && !policy.allowViewerExport) {
+    effective.delete('reports.export');
   }
   if (user.role === 'operations_manager' && policy.allowOpsIntegrationSync) {
     effective.add('integration.manage');
   }
 
-  // إضافة الصلاحيات المخصصة المسموحة ضمن سقف الأمان
-  for (const extra of user.extraPermissions || []) {
-    if (SUPER_ADMIN_EXCLUSIVE_PERMISSIONS.has(extra)) continue;
-    if (
-      (user.role === 'viewer' || user.role === 'delivery_rep') &&
-      READ_ONLY_OR_REP_BLOCKED_PERMISSIONS.has(extra)
-    ) {
-      continue;
+  // تطبيق تعديلات مصفوفة الأدوار الشاملة التي يحددها مدير النظام (Super Admin)
+  const roleGrantsMap: Record<Exclude<UserRole, 'super_admin'>, PermissionKey[]> = {
+    operations_manager: policy.opsGrantedPerms || [],
+    supervisor: policy.supGrantedPerms || [],
+    delivery_rep: policy.repGrantedPerms || [],
+    viewer: policy.viewerGrantedPerms || [],
+  };
+  const roleRevokesMap: Record<Exclude<UserRole, 'super_admin'>, PermissionKey[]> = {
+    operations_manager: policy.opsRevokedPerms || [],
+    supervisor: policy.supRevokedPerms || [],
+    delivery_rep: policy.repRevokedPerms || [],
+    viewer: policy.viewerRevokedPerms || [],
+  };
+
+  for (const granted of roleGrantsMap[user.role] || []) {
+    if (isPermissionCustomizableForRole(user.role, granted)) {
+      effective.add(granted);
     }
+  }
+  for (const revoked of roleRevokesMap[user.role] || []) {
+    effective.delete(revoked);
+  }
+
+  // إضافة الصلاحيات المخصصة الفردية للمستخدم ضمن سقف الأمان
+  for (const extra of user.extraPermissions || []) {
+    if (!isPermissionCustomizableForRole(user.role, extra)) continue;
     effective.add(extra);
   }
 
-  // سحب الصلاحيات الملغاة
+  // سحب الصلاحيات الملغاة فردياً
   for (const revoked of user.revokedPermissions || []) {
     effective.delete(revoked);
+  }
+
+  // في حال تفعيل وضع تجميد التعديلات الشامل من مدير النظام، تُحجب جميع صلاحيات الكتابة عن غير مدير النظام فوراً
+  if (policy.emergencyReadOnlyMode) {
+    for (const writePerm of WRITE_ACTION_PERMISSIONS) {
+      effective.delete(writePerm);
+    }
   }
 
   return effective;
@@ -304,8 +384,12 @@ export function canAccessRoute(
   policy: SecurityPolicySettings = DEFAULT_SECURITY_POLICY
 ): boolean {
   if (!user || user.status !== 'active') return false;
+  if (user.role !== 'super_admin' && policy.systemLockdownMode) return false;
 
   switch (route) {
+    case 'security_center':
+    case 'security_settings':
+      return user.role === 'super_admin' && hasPermission(user, 'settings.manage', policy);
     case 'profile':
       return true;
     case 'my_portal':
@@ -324,9 +408,13 @@ export function canAccessRoute(
       );
     case 'requests':
       return (
+        user.role === 'super_admin' ||
         hasPermission(user, 'leave.request', policy) ||
         hasPermission(user, 'leave.review', policy) ||
-        hasPermission(user, 'leave.approve', policy)
+        hasPermission(user, 'leave.approve', policy) ||
+        user.role === 'delivery_rep' ||
+        user.role === 'supervisor' ||
+        user.role === 'operations_manager'
       );
     case 'users':
       return user.role === 'super_admin' || hasPermission(user, 'users.view', policy);
@@ -339,8 +427,6 @@ export function canAccessRoute(
       );
     case 'audit_logs':
       return user.role === 'super_admin' || hasPermission(user, 'audit.view', policy);
-    case 'security_settings':
-      return user.role === 'super_admin' && hasPermission(user, 'settings.manage', policy);
     default:
       return false;
   }
