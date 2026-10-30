@@ -1,0 +1,728 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ---------------------------------------------------------
+    // Primitive Helpers (Denial-of-Wallet Safe Ordering)
+    // ---------------------------------------------------------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidOptionalId(id) {
+      return id is string && id.size() <= 128 && (id.size() == 0 || id.matches('^[a-zA-Z0-9_\\-]+$'));
+    }
+
+    function isBootstrappedAdminEmail() {
+      return isVerifiedUser() && request.auth.token.email == 'aladdinamrr@gmail.com';
+    }
+
+    function userDocPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    function invitationDocPath(emailKey) {
+      return /databases/$(database)/documents/preprovisionedUsers/$(emailKey);
+    }
+
+    function hasActiveProfile() {
+      return isSignedIn() &&
+        exists(userDocPath(request.auth.uid)) &&
+        get(userDocPath(request.auth.uid)).data.status == 'active';
+    }
+
+    function currentUserData() {
+      return get(userDocPath(request.auth.uid)).data;
+    }
+
+    function isSuperAdmin() {
+      return hasActiveProfile() && currentUserData().role == 'super_admin';
+    }
+
+    function isOperationsManager() {
+      return hasActiveProfile() && currentUserData().role == 'operations_manager';
+    }
+
+    function isSupervisor() {
+      return hasActiveProfile() && currentUserData().role == 'supervisor';
+    }
+
+    function isDeliveryRep() {
+      return hasActiveProfile() && currentUserData().role == 'delivery_rep';
+    }
+
+    function isViewer() {
+      return hasActiveProfile() && currentUserData().role == 'viewer';
+    }
+
+    function isValidRole(r) {
+      return r in ['super_admin', 'operations_manager', 'supervisor', 'delivery_rep', 'viewer'];
+    }
+
+    function isBoundedStringArray(arr, maxLen) {
+      return arr is list && arr.size() <= maxLen && (arr.size() == 0 || (arr[0] is string && arr[0].size() <= 64));
+    }
+
+    // ---------------------------------------------------------
+    // Entity Schema Validation Blueprints (Anti-Update-Gap)
+    // ---------------------------------------------------------
+    function isValidUserAccount(data) {
+      return data.keys().hasAll([
+          'uid', 'name', 'email', 'role', 'extraPermissions', 'revokedPermissions',
+          'employeeId', 'teamId', 'status', 'emailKey', 'createdAt', 'updatedAt', 'lastLoginAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid', 'name', 'email', 'role', 'extraPermissions', 'revokedPermissions',
+          'employeeId', 'teamId', 'status', 'emailKey', 'createdAt', 'updatedAt', 'lastLoginAt'
+        ]) &&
+        isValidId(data.uid) &&
+        data.name is string && data.name.size() >= 2 && data.name.size() <= 120 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 180 &&
+        isValidRole(data.role) &&
+        isBoundedStringArray(data.extraPermissions, 40) &&
+        isBoundedStringArray(data.revokedPermissions, 40) &&
+        isValidOptionalId(data.employeeId) &&
+        isValidOptionalId(data.teamId) &&
+        data.status in ['active', 'disabled', 'pending'] &&
+        isValidId(data.emailKey) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp &&
+        data.lastLoginAt is timestamp;
+    }
+
+    function isValidPreprovisionedAccount(data) {
+      return data.keys().hasAll([
+          'emailKey', 'name', 'email', 'role', 'extraPermissions', 'revokedPermissions',
+          'employeeId', 'teamId', 'status', 'createdBy', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'emailKey', 'name', 'email', 'role', 'extraPermissions', 'revokedPermissions',
+          'employeeId', 'teamId', 'status', 'createdBy', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.emailKey) &&
+        data.name is string && data.name.size() >= 2 && data.name.size() <= 120 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 180 &&
+        isValidRole(data.role) &&
+        isBoundedStringArray(data.extraPermissions, 40) &&
+        isBoundedStringArray(data.revokedPermissions, 40) &&
+        isValidOptionalId(data.employeeId) &&
+        isValidOptionalId(data.teamId) &&
+        data.status in ['active', 'disabled', 'pending'] &&
+        isValidId(data.createdBy) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidTeam(data) {
+      return data.keys().hasAll([
+          'teamId', 'teamName', 'supervisorId', 'status', 'memberCount', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'teamId', 'teamName', 'supervisorId', 'status', 'memberCount', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.teamId) &&
+        data.teamName is string && data.teamName.size() >= 2 && data.teamName.size() <= 120 &&
+        isValidOptionalId(data.supervisorId) &&
+        data.status in ['active', 'disabled'] &&
+        data.memberCount is int && data.memberCount >= 0 && data.memberCount <= 5000 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidEmployeeRecord(data) {
+      return data.keys().hasAll([
+          'id', 'employeeCode', 'fullName', 'phone', 'hireDate', 'status',
+          'externalId', 'teamId', 'userId', 'notes', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'employeeCode', 'fullName', 'phone', 'hireDate', 'status',
+          'externalId', 'teamId', 'userId', 'notes', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.employeeCode is string && data.employeeCode.size() >= 1 && data.employeeCode.size() <= 64 &&
+        data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 120 &&
+        data.phone is string && data.phone.size() <= 32 &&
+        data.hireDate is string && data.hireDate.size() <= 20 &&
+        data.status in ['active', 'suspended'] &&
+        data.externalId is string && data.externalId.size() <= 128 &&
+        isValidOptionalId(data.teamId) &&
+        isValidOptionalId(data.userId) &&
+        data.notes is string && data.notes.size() <= 500 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAttendanceDoc(data) {
+      return data.keys().hasAll([
+          'id', 'employeeId', 'teamId', 'date', 'shiftSelection', 'attendance',
+          'startTime', 'endTime', 'breakMinutes', 'totalWorkedMinutes',
+          'supervisorNotes', 'source', 'recordedBy', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'employeeId', 'teamId', 'date', 'shiftSelection', 'attendance',
+          'startTime', 'endTime', 'breakMinutes', 'totalWorkedMinutes',
+          'supervisorNotes', 'source', 'recordedBy', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.employeeId) &&
+        isValidOptionalId(data.teamId) &&
+        data.date is string && data.date.size() == 10 && data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+        data.shiftSelection in ['selected', 'not_selected', 'undecided', 'exempt'] &&
+        data.attendance in ['worked', 'absent', 'leave', 'day_off', 'pending'] &&
+        data.startTime is string && data.startTime.size() <= 10 &&
+        data.endTime is string && data.endTime.size() <= 10 &&
+        data.breakMinutes is int && data.breakMinutes >= 0 && data.breakMinutes <= 720 &&
+        data.totalWorkedMinutes is int && data.totalWorkedMinutes >= 0 && data.totalWorkedMinutes <= 1440 &&
+        data.supervisorNotes is string && data.supervisorNotes.size() <= 500 &&
+        data.source in ['manual', 'external_sync', 'approved_request'] &&
+        isValidId(data.recordedBy) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidWorkflowRequest(data) {
+      return data.keys().hasAll([
+          'requestId', 'employeeId', 'employeeName', 'teamId', 'submittedBy',
+          'submitterRole', 'requestType', 'requestDate', 'proposedStartTime',
+          'proposedEndTime', 'description', 'evidenceUrl', 'status',
+          'supervisorRecommendation', 'reviewedBy', 'reviewerName',
+          'reviewComment', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'requestId', 'employeeId', 'employeeName', 'teamId', 'submittedBy',
+          'submitterRole', 'requestType', 'requestDate', 'proposedStartTime',
+          'proposedEndTime', 'description', 'evidenceUrl', 'status',
+          'supervisorRecommendation', 'reviewedBy', 'reviewerName',
+          'reviewComment', 'reviewedAt', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.requestId) &&
+        isValidId(data.employeeId) &&
+        data.employeeName is string && data.employeeName.size() >= 1 && data.employeeName.size() <= 120 &&
+        isValidOptionalId(data.teamId) &&
+        isValidId(data.submittedBy) &&
+        isValidRole(data.submitterRole) &&
+        data.requestType in ['leave', 'absence_dispute', 'attendance_correction', 'checkout_correction', 'shift_modification'] &&
+        data.requestDate is string && data.requestDate.size() == 10 && data.requestDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+        data.proposedStartTime is string && data.proposedStartTime.size() <= 10 &&
+        data.proposedEndTime is string && data.proposedEndTime.size() <= 10 &&
+        data.description is string && data.description.size() >= 3 && data.description.size() <= 1000 &&
+        data.evidenceUrl is string && data.evidenceUrl.size() <= 500 &&
+        data.status in ['pending', 'recommended', 'approved', 'rejected'] &&
+        data.supervisorRecommendation is string && data.supervisorRecommendation.size() <= 500 &&
+        isValidOptionalId(data.reviewedBy) &&
+        data.reviewerName is string && data.reviewerName.size() <= 120 &&
+        data.reviewComment is string && data.reviewComment.size() <= 500 &&
+        (!('reviewedAt' in data) || data.reviewedAt is timestamp) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAuditLogEntry(data) {
+      return data.keys().hasAll([
+          'logId', 'actorUserId', 'actorName', 'actorRole', 'category',
+          'action', 'targetType', 'targetId', 'beforeSummary', 'afterSummary',
+          'reason', 'result', 'timestamp'
+        ]) &&
+        data.keys().hasOnly([
+          'logId', 'actorUserId', 'actorName', 'actorRole', 'category',
+          'action', 'targetType', 'targetId', 'beforeSummary', 'afterSummary',
+          'reason', 'result', 'timestamp'
+        ]) &&
+        isValidId(data.logId) &&
+        isValidId(data.actorUserId) &&
+        data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 120 &&
+        isValidRole(data.actorRole) &&
+        data.category in ['security', 'operational'] &&
+        data.action is string && data.action.size() >= 2 && data.action.size() <= 100 &&
+        data.targetType is string && data.targetType.size() >= 2 && data.targetType.size() <= 64 &&
+        data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128 &&
+        data.beforeSummary is string && data.beforeSummary.size() <= 1000 &&
+        data.afterSummary is string && data.afterSummary.size() <= 1000 &&
+        data.reason is string && data.reason.size() <= 500 &&
+        data.result in ['success', 'denied', 'failure'] &&
+        data.timestamp is timestamp;
+    }
+
+    function isValidSecurityPolicy(data) {
+      return data.keys().hasAll([
+          'policyId', 'allowSupervisorLeaveRecommendation', 'allowViewerExport',
+          'allowOpsIntegrationSync', 'enforceAdminMfaNotice', 'sessionTimeoutMinutes',
+          'externalSyncEndpoint', 'lastExternalSyncStatus', 'lastExternalSyncImported',
+          'lastExternalSyncFailed', 'lastExternalSyncTime', 'updatedBy', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'policyId', 'allowSupervisorLeaveRecommendation', 'allowViewerExport',
+          'allowOpsIntegrationSync', 'enforceAdminMfaNotice', 'sessionTimeoutMinutes',
+          'externalSyncEndpoint', 'lastExternalSyncStatus', 'lastExternalSyncImported',
+          'lastExternalSyncFailed', 'lastExternalSyncTime', 'updatedBy', 'updatedAt'
+        ]) &&
+        isValidId(data.policyId) &&
+        data.allowSupervisorLeaveRecommendation is bool &&
+        data.allowViewerExport is bool &&
+        data.allowOpsIntegrationSync is bool &&
+        data.enforceAdminMfaNotice is bool &&
+        data.sessionTimeoutMinutes is int && data.sessionTimeoutMinutes >= 5 && data.sessionTimeoutMinutes <= 1440 &&
+        data.externalSyncEndpoint is string && data.externalSyncEndpoint.size() <= 300 &&
+        data.lastExternalSyncStatus is string && data.lastExternalSyncStatus.size() <= 100 &&
+        data.lastExternalSyncImported is int && data.lastExternalSyncImported >= 0 &&
+        data.lastExternalSyncFailed is int && data.lastExternalSyncFailed >= 0 &&
+        data.lastExternalSyncTime is string && data.lastExternalSyncTime.size() <= 64 &&
+        isValidId(data.updatedBy) &&
+        data.updatedAt is timestamp;
+    }
+
+    // Helper verifying that an invited user claims ONLY the exact role, scope, and active status pre-provisioned by Super Admin
+    function matchesPreprovisionedInvitation(data) {
+      return exists(invitationDocPath(data.emailKey)) &&
+        get(invitationDocPath(data.emailKey)).data.email == request.auth.token.email &&
+        get(invitationDocPath(data.emailKey)).data.status == 'active' &&
+        data.email == request.auth.token.email &&
+        data.role == get(invitationDocPath(data.emailKey)).data.role &&
+        data.employeeId == get(invitationDocPath(data.emailKey)).data.employeeId &&
+        data.teamId == get(invitationDocPath(data.emailKey)).data.teamId &&
+        data.extraPermissions == get(invitationDocPath(data.emailKey)).data.extraPermissions &&
+        data.revokedPermissions == get(invitationDocPath(data.emailKey)).data.revokedPermissions &&
+        data.status == 'active';
+    }
+
+    // ---------------------------------------------------------
+    // Collection 1: /users/{userId}
+    // PII Isolated: Only Owner or Super Admin / Ops Manager can read
+    // ---------------------------------------------------------
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (
+        request.auth.uid == userId ||
+        isSuperAdmin() ||
+        isOperationsManager()
+      );
+
+      allow list: if isSignedIn() && (
+        existing().uid == request.auth.uid ||
+        isSuperAdmin() ||
+        isOperationsManager()
+      );
+
+      // Closed Registration:
+      // 1) Bootstrapped Super Admin claiming own account, OR
+      // 2) Pre-provisioned invited user claiming exact pre-approved role & scope, OR
+      // 3) Active Super Admin creating a user record directly
+      allow create: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isValidUserAccount(incoming()) &&
+        incoming().uid == userId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time && (
+          (
+            request.auth.uid == userId &&
+            isBootstrappedAdminEmail() &&
+            incoming().email == request.auth.token.email &&
+            incoming().role == 'super_admin' &&
+            incoming().status == 'active'
+          ) ||
+          (
+            request.auth.uid == userId &&
+            matchesPreprovisionedInvitation(incoming())
+          ) ||
+          isSuperAdmin()
+        );
+
+      allow update: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isValidUserAccount(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().emailKey == existing().emailKey &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          // Action 1: Owner updating own lastLoginAt or display name ONLY
+          (
+            request.auth.uid == userId &&
+            existing().status == 'active' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'lastLoginAt', 'updatedAt'])
+          ) ||
+          // Action 2: Super Admin managing users (cannot self-demote or self-disable to protect last Super Admin)
+          (
+            isSuperAdmin() &&
+            (
+              request.auth.uid != userId ||
+              (incoming().role == 'super_admin' && incoming().status == 'active')
+            ) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'name', 'role', 'extraPermissions', 'revokedPermissions',
+              'employeeId', 'teamId', 'status', 'updatedAt'
+            ])
+          )
+        );
+
+      allow delete: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isSuperAdmin() &&
+        request.auth.uid != userId &&
+        existing().role != 'super_admin';
+    }
+
+    // ---------------------------------------------------------
+    // Collection 2: /preprovisionedUsers/{emailKey}
+    // ---------------------------------------------------------
+    match /preprovisionedUsers/{emailKey} {
+      allow get: if isVerifiedUser() && isValidId(emailKey) && (
+        isSuperAdmin() ||
+        existing().email == request.auth.token.email
+      );
+
+      allow list: if isSignedIn() && isSuperAdmin();
+
+      allow create: if isVerifiedUser() &&
+        isValidId(emailKey) &&
+        isValidPreprovisionedAccount(incoming()) &&
+        incoming().emailKey == emailKey &&
+        incoming().createdBy == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isSuperAdmin();
+
+      allow update: if isVerifiedUser() &&
+        isValidId(emailKey) &&
+        isValidPreprovisionedAccount(incoming()) &&
+        incoming().emailKey == existing().emailKey &&
+        incoming().createdBy == existing().createdBy &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        isSuperAdmin() &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'name', 'role', 'extraPermissions', 'revokedPermissions',
+          'employeeId', 'teamId', 'status', 'updatedAt'
+        ]);
+
+      allow delete: if isVerifiedUser() && isValidId(emailKey) && isSuperAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // Collection 3: /teams/{teamId}
+    // ---------------------------------------------------------
+    match /teams/{teamId} {
+      allow get: if isSignedIn() && isValidId(teamId) && (
+        isSuperAdmin() ||
+        isOperationsManager() ||
+        isViewer() ||
+        (isSupervisor() && (existing().teamId == currentUserData().teamId || existing().supervisorId == request.auth.uid))
+      );
+
+      allow list: if isSignedIn() && (
+        isSuperAdmin() ||
+        isOperationsManager() ||
+        isViewer() ||
+        (isSupervisor() && (existing().teamId == currentUserData().teamId || existing().supervisorId == request.auth.uid))
+      );
+
+      allow create: if isVerifiedUser() &&
+        isValidId(teamId) &&
+        isValidTeam(incoming()) &&
+        incoming().teamId == teamId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isSuperAdmin();
+
+      allow update: if isVerifiedUser() &&
+        isValidId(teamId) &&
+        isValidTeam(incoming()) &&
+        incoming().teamId == existing().teamId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          (
+            isSuperAdmin() &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'teamName', 'supervisorId', 'status', 'memberCount', 'updatedAt'
+            ])
+          ) ||
+          (
+            isOperationsManager() &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['memberCount', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isVerifiedUser() && isValidId(teamId) && isSuperAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // Collection 4: /employees/{employeeId}
+    // ---------------------------------------------------------
+    match /employees/{employeeId} {
+      allow get: if isSignedIn() && isValidId(employeeId) && (
+        isSuperAdmin() ||
+        isOperationsManager() ||
+        isViewer() ||
+        (isSupervisor() && existing().teamId == currentUserData().teamId) ||
+        (isDeliveryRep() && (employeeId == currentUserData().employeeId || existing().userId == request.auth.uid))
+      );
+
+      allow list: if isSignedIn() && (
+        isSuperAdmin() ||
+        isOperationsManager() ||
+        isViewer() ||
+        (isSupervisor() && existing().teamId == currentUserData().teamId) ||
+        (isDeliveryRep() && (existing().id == currentUserData().employeeId || existing().userId == request.auth.uid))
+      );
+
+      allow create: if isVerifiedUser() &&
+        isValidId(employeeId) &&
+        isValidEmployeeRecord(incoming()) &&
+        incoming().id == employeeId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (isSuperAdmin() || isOperationsManager());
+
+      allow update: if isVerifiedUser() &&
+        isValidId(employeeId) &&
+        isValidEmployeeRecord(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          // Tier 1: Super Admin & Operations Manager
+          (
+            (isSuperAdmin() || isOperationsManager()) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'employeeCode', 'fullName', 'phone', 'hireDate', 'status',
+              'externalId', 'teamId', 'userId', 'notes', 'updatedAt'
+            ])
+          ) ||
+          // Tier 2: Supervisor updating notes on own team employee
+          (
+            isSupervisor() &&
+            existing().teamId == currentUserData().teamId &&
+            incoming().teamId == existing().teamId &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['notes', 'updatedAt'])
+          ) ||
+          // Tier 3: Invited Delivery Rep linking own userId on first login if not yet linked
+          (
+            isDeliveryRep() &&
+            employeeId == currentUserData().employeeId &&
+            existing().userId == '' &&
+            incoming().userId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['userId', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isVerifiedUser() && isValidId(employeeId) && isSuperAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // Collection 5: /attendance/{recordId}
+    // ---------------------------------------------------------
+    match /attendance/{recordId} {
+      allow get: if isSignedIn() && isValidId(recordId) && (
+        isSuperAdmin() ||
+        isOperationsManager() ||
+        isViewer() ||
+        (isSupervisor() && existing().teamId == currentUserData().teamId) ||
+        (isDeliveryRep() && existing().employeeId == currentUserData().employeeId)
+      );
+
+      allow list: if isSignedIn() && (
+        isSuperAdmin() ||
+        isOperationsManager() ||
+        isViewer() ||
+        (isSupervisor() && existing().teamId == currentUserData().teamId) ||
+        (isDeliveryRep() && existing().employeeId == currentUserData().employeeId)
+      );
+
+      allow create: if isVerifiedUser() &&
+        isValidId(recordId) &&
+        isValidAttendanceDoc(incoming()) &&
+        incoming().id == recordId &&
+        incoming().recordedBy == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/employees/$(incoming().employeeId)) && (
+          isSuperAdmin() ||
+          isOperationsManager() ||
+          (isSupervisor() && incoming().teamId == currentUserData().teamId && incoming().source == 'manual')
+        );
+
+      allow update: if isVerifiedUser() &&
+        isValidId(recordId) &&
+        isValidAttendanceDoc(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().employeeId == existing().employeeId &&
+        incoming().date == existing().date &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().recordedBy == request.auth.uid &&
+        incoming().updatedAt == request.time && (
+          (
+            (isSuperAdmin() || isOperationsManager()) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'teamId', 'shiftSelection', 'attendance', 'startTime', 'endTime',
+              'breakMinutes', 'totalWorkedMinutes', 'supervisorNotes', 'source',
+              'recordedBy', 'updatedAt'
+            ])
+          ) ||
+          (
+            isSupervisor() &&
+            existing().teamId == currentUserData().teamId &&
+            incoming().teamId == existing().teamId &&
+            existing().source != 'external_sync' &&
+            incoming().source == 'manual' &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'attendance', 'startTime', 'endTime', 'breakMinutes',
+              'totalWorkedMinutes', 'supervisorNotes', 'source', 'recordedBy', 'updatedAt'
+            ])
+          )
+        );
+
+      allow delete: if isVerifiedUser() &&
+        isValidId(recordId) &&
+        (isSuperAdmin() || isOperationsManager());
+    }
+
+    // ---------------------------------------------------------
+    // Collection 6: /requests/{requestId}
+    // ---------------------------------------------------------
+    match /requests/{requestId} {
+      allow get: if isSignedIn() && isValidId(requestId) && (
+        isSuperAdmin() ||
+        isOperationsManager() ||
+        (isSupervisor() && existing().teamId == currentUserData().teamId) ||
+        (isDeliveryRep() && (existing().submittedBy == request.auth.uid || existing().employeeId == currentUserData().employeeId))
+      );
+
+      allow list: if isSignedIn() && (
+        isSuperAdmin() ||
+        isOperationsManager() ||
+        (isSupervisor() && existing().teamId == currentUserData().teamId) ||
+        (isDeliveryRep() && (existing().submittedBy == request.auth.uid || existing().employeeId == currentUserData().employeeId))
+      );
+
+      allow create: if isVerifiedUser() &&
+        isValidId(requestId) &&
+        isValidWorkflowRequest(incoming()) &&
+        incoming().requestId == requestId &&
+        incoming().submittedBy == request.auth.uid &&
+        incoming().status == 'pending' &&
+        incoming().reviewedBy == '' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/employees/$(incoming().employeeId)) && (
+          isSuperAdmin() ||
+          isOperationsManager() ||
+          (isSupervisor() && incoming().teamId == currentUserData().teamId && incoming().submitterRole == 'supervisor') ||
+          (isDeliveryRep() && incoming().employeeId == currentUserData().employeeId && incoming().submitterRole == 'delivery_rep')
+        );
+
+      allow update: if isVerifiedUser() &&
+        isValidId(requestId) &&
+        isValidWorkflowRequest(incoming()) &&
+        incoming().requestId == existing().requestId &&
+        incoming().employeeId == existing().employeeId &&
+        incoming().submittedBy == existing().submittedBy &&
+        incoming().submitterRole == existing().submitterRole &&
+        incoming().requestType == existing().requestType &&
+        incoming().requestDate == existing().requestDate &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isSuperAdmin() ||
+          (
+            existing().status in ['pending', 'recommended'] && (
+              (
+                isSupervisor() &&
+                existing().teamId == currentUserData().teamId &&
+                existing().submittedBy != request.auth.uid &&
+                incoming().status == 'recommended' &&
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'status', 'supervisorRecommendation', 'updatedAt'
+                ])
+              ) ||
+              (
+                isOperationsManager() &&
+                existing().submittedBy != request.auth.uid &&
+                incoming().status in ['approved', 'rejected'] &&
+                incoming().reviewedBy == request.auth.uid &&
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'status', 'reviewedBy', 'reviewerName', 'reviewComment', 'reviewedAt', 'updatedAt'
+                ])
+              )
+            )
+          )
+        );
+
+      allow delete: if false;
+    }
+
+    // ---------------------------------------------------------
+    // Collection 7: /auditLogs/{logId}
+    // ---------------------------------------------------------
+    match /auditLogs/{logId} {
+      allow get: if isSignedIn() && isValidId(logId) && (
+        isSuperAdmin() ||
+        (isOperationsManager() && existing().category == 'operational')
+      );
+
+      allow list: if isSignedIn() && (
+        isSuperAdmin() ||
+        (isOperationsManager() && existing().category == 'operational')
+      );
+
+      allow create: if isVerifiedUser() &&
+        isValidId(logId) &&
+        isValidAuditLogEntry(incoming()) &&
+        incoming().logId == logId &&
+        incoming().actorUserId == request.auth.uid &&
+        incoming().timestamp == request.time &&
+        hasActiveProfile();
+
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // ---------------------------------------------------------
+    // Collection 8: /securitySettings/{policyId}
+    // ---------------------------------------------------------
+    match /securitySettings/{policyId} {
+      allow get: if isSignedIn() && isValidId(policyId) && hasActiveProfile();
+      allow list: if isSignedIn() && isSuperAdmin();
+
+      allow create: if isVerifiedUser() &&
+        isValidId(policyId) &&
+        isValidSecurityPolicy(incoming()) &&
+        incoming().policyId == policyId &&
+        incoming().updatedBy == request.auth.uid &&
+        incoming().updatedAt == request.time &&
+        isSuperAdmin();
+
+      allow update: if isVerifiedUser() &&
+        isValidId(policyId) &&
+        isValidSecurityPolicy(incoming()) &&
+        incoming().policyId == existing().policyId &&
+        incoming().updatedBy == request.auth.uid &&
+        incoming().updatedAt == request.time &&
+        isSuperAdmin() &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'allowSupervisorLeaveRecommendation', 'allowViewerExport',
+          'allowOpsIntegrationSync', 'enforceAdminMfaNotice', 'sessionTimeoutMinutes',
+          'externalSyncEndpoint', 'lastExternalSyncStatus', 'lastExternalSyncImported',
+          'lastExternalSyncFailed', 'lastExternalSyncTime', 'updatedBy', 'updatedAt'
+        ]);
+
+      allow delete: if false;
+    }
+  }
+}

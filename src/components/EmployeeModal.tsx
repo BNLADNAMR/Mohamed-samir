@@ -1,25 +1,33 @@
 import React, { useState, useEffect } from 'react';
 import { X, UserPlus, Save, Trash2 } from 'lucide-react';
-import { Employee, EmployeeStatus } from '../types';
+import { Employee, EmployeeStatus, Team, UserProfile } from '../types';
 import { generateNextUniqueEmployeeCode } from '../utils/shiftCalculations';
 
 interface EmployeeModalProps {
+  currentUser: UserProfile;
+  teams: Team[];
   existingEmployees: Employee[];
   editingEmployee?: Employee | null;
   todayStr: string;
+  canDeleteEmployee: boolean;
   onSave: (emp: Employee, isEdit: boolean) => void;
   onDelete?: (empId: string) => void;
   onClose: () => void;
 }
 
 export const EmployeeModal: React.FC<EmployeeModalProps> = ({
+  currentUser,
+  teams,
   existingEmployees,
   editingEmployee,
   todayStr,
+  canDeleteEmployee,
   onSave,
   onDelete,
   onClose,
 }) => {
+  const isSupervisorNotesOnly = currentUser.role === 'supervisor';
+
   const defaultCode = editingEmployee
     ? editingEmployee.employeeCode
     : generateNextUniqueEmployeeCode(existingEmployees);
@@ -31,6 +39,7 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
   const [status, setStatus] = useState<EmployeeStatus>(
     editingEmployee?.status || 'active'
   );
+  const [teamId, setTeamId] = useState(editingEmployee?.teamId || '');
   const [externalId, setExternalId] = useState(editingEmployee?.externalId || '');
   const [notes, setNotes] = useState(editingEmployee?.notes || '');
   const [errorMsg, setErrorMsg] = useState('');
@@ -73,6 +82,8 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
       hireDate: hireDate || todayStr,
       status,
       externalId: externalId.trim() || `EXT_${trimmedCode}`,
+      teamId: teamId.trim(),
+      userId: editingEmployee?.userId || '',
       notes: notes.trim(),
     };
 
@@ -92,7 +103,11 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
           <div className="flex items-center gap-2">
             <UserPlus className="w-4 h-4 text-indigo-400" />
             <h3 className="font-bold text-base">
-              {editingEmployee ? 'تعديل بيانات المندوب' : 'إضافة مندوب جديد'}
+              {isSupervisorNotesOnly
+                ? 'تحديث ملاحظات المشرف على المندوب'
+                : editingEmployee
+                ? 'تعديل بيانات المندوب'
+                : 'إضافة مندوب جديد'}
             </h3>
           </div>
           <button
@@ -119,13 +134,14 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
             <input
               type="text"
               required
+              disabled={isSupervisorNotesOnly}
               value={fullName}
               onChange={(e) => {
                 setFullName(e.target.value);
                 if (errorMsg) setErrorMsg('');
               }}
               placeholder="مثال: أحمد محمد علي"
-              className="w-full border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-600"
+              className="w-full border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-indigo-600"
             />
           </div>
 
@@ -136,13 +152,14 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
               </label>
               <input
                 type="text"
+                disabled={isSupervisorNotesOnly}
                 value={employeeCode}
                 onChange={(e) => {
                   setEmployeeCode(e.target.value);
                   if (errorMsg) setErrorMsg('');
                 }}
                 placeholder={defaultCode}
-                className="w-full border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-mono tabular-nums focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                className="w-full border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-mono tabular-nums disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-indigo-600"
               />
             </div>
             <div>
@@ -150,9 +167,10 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
                 حالة المندوب
               </label>
               <select
+                disabled={isSupervisorNotesOnly}
                 value={status}
                 onChange={(e) => setStatus(e.target.value as EmployeeStatus)}
-                className="w-full border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                className="w-full border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-indigo-600"
               >
                 <option value="active">نشط</option>
                 <option value="suspended">موقوف مؤقتاً</option>
@@ -167,10 +185,11 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
               </label>
               <input
                 type="tel"
+                disabled={isSupervisorNotesOnly}
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 placeholder="01012345678"
-                className="w-full border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-mono tabular-nums focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                className="w-full border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-mono tabular-nums disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-indigo-600"
               />
             </div>
             <div>
@@ -179,11 +198,31 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
               </label>
               <input
                 type="date"
+                disabled={isSupervisorNotesOnly}
                 value={hireDate}
                 onChange={(e) => setHireDate(e.target.value)}
-                className="w-full border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-mono tabular-nums focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                className="w-full border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-mono tabular-nums disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-indigo-600"
               />
             </div>
+          </div>
+
+          <div>
+            <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">
+              الفريق الأساسي للمندوب
+            </label>
+            <select
+              disabled={isSupervisorNotesOnly}
+              value={teamId}
+              onChange={(e) => setTeamId(e.target.value)}
+              className="w-full border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-indigo-600"
+            >
+              <option value="">— غير معين لفريق بعد —</option>
+              {teams.map((t) => (
+                <option key={t.teamId} value={t.teamId}>
+                  {t.teamName} ({t.teamId})
+                </option>
+              ))}
+            </select>
           </div>
 
           <div>
@@ -192,29 +231,30 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
             </label>
             <input
               type="text"
+              disabled={isSupervisorNotesOnly}
               value={externalId}
               onChange={(e) => setExternalId(e.target.value)}
-              placeholder="معرف المندوب في ملف الشفتات"
-              className="w-full border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-mono tabular-nums focus:outline-none focus:ring-2 focus:ring-indigo-600"
+              placeholder="معرف المندوب في نظام الشركة الخارجي"
+              className="w-full border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-mono tabular-nums disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-indigo-600"
             />
           </div>
 
           <div>
             <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">
-              ملاحظات إدارية (المنطقة / الفرع)
+              ملاحظات إدارية / ملاحظات المشرف
             </label>
             <input
               type="text"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               placeholder="مثال: قطاع شرق القاهرة"
-              className="w-full border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-600"
+              className="w-full border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-600"
             />
           </div>
 
           <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-200 dark:border-slate-800">
             <div>
-              {editingEmployee && onDelete && (
+              {editingEmployee && onDelete && canDeleteEmployee && (
                 confirmDelete ? (
                   <div className="flex items-center gap-1.5">
                     <button

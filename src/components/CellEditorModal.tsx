@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { X, Clock, Trash2, Check } from 'lucide-react';
+import { X, Clock, Trash2, Check, ShieldAlert } from 'lucide-react';
 import {
   AttendanceRecord,
   AttendanceStatus,
   Employee,
   ShiftSelectionStatus,
+  UserProfile,
 } from '../types';
 import {
   calculateShiftMinutes,
@@ -12,9 +13,12 @@ import {
 } from '../utils/shiftCalculations';
 
 interface CellEditorModalProps {
+  currentUser: UserProfile;
   employee: Employee;
   date: string;
   record?: AttendanceRecord;
+  canEditShiftSelection: boolean;
+  canDeleteRecord: boolean;
   onSave: (data: {
     employeeId: string;
     date: string;
@@ -30,9 +34,12 @@ interface CellEditorModalProps {
 }
 
 export const CellEditorModal: React.FC<CellEditorModalProps> = ({
+  currentUser,
   employee,
   date,
   record,
+  canEditShiftSelection,
+  canDeleteRecord,
   onSave,
   onDelete,
   onClose,
@@ -50,6 +57,9 @@ export const CellEditorModal: React.FC<CellEditorModalProps> = ({
     record?.supervisorNotes || ''
   );
 
+  const isExternalProtectedForSupervisor =
+    currentUser.role === 'supervisor' && record?.source === 'external_sync';
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -60,10 +70,12 @@ export const CellEditorModal: React.FC<CellEditorModalProps> = ({
 
   const handleAttendanceChange = (val: AttendanceStatus) => {
     setAttendance(val);
-    if (val === 'leave' || val === 'day_off') {
-      setShiftSelection('exempt');
-    } else if (val === 'worked' && shiftSelection === 'exempt') {
-      setShiftSelection('selected');
+    if (canEditShiftSelection) {
+      if (val === 'leave' || val === 'day_off') {
+        setShiftSelection('exempt');
+      } else if (val === 'worked' && shiftSelection === 'exempt') {
+        setShiftSelection('selected');
+      }
     }
   };
 
@@ -72,10 +84,11 @@ export const CellEditorModal: React.FC<CellEditorModalProps> = ({
       ? calculateShiftMinutes(startTime, endTime, breakMinutes)
       : 0;
 
-  const isTimeDisabled = attendance !== 'worked';
+  const isTimeDisabled = attendance !== 'worked' || isExternalProtectedForSupervisor;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isExternalProtectedForSupervisor) return;
     onSave({
       employeeId: employee.id,
       date,
@@ -87,6 +100,13 @@ export const CellEditorModal: React.FC<CellEditorModalProps> = ({
       supervisorNotes: supervisorNotes.trim(),
     });
   };
+
+  const sourceLabel =
+    record?.source === 'external_sync'
+      ? 'مستورد من تطبيق الشركة الخارجي'
+      : record?.source === 'approved_request'
+      ? 'معتمد بموجب طلب رسمي'
+      : 'إدخال يدوي موثق';
 
   return (
     <div
@@ -115,6 +135,24 @@ export const CellEditorModal: React.FC<CellEditorModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4 text-xs">
+          {record && (
+            <div className="px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-800 text-[11px] flex items-center justify-between">
+              <span className="text-slate-500 dark:text-slate-400">مصدر البيانات:</span>
+              <span className="font-bold text-slate-800 dark:text-slate-200">
+                {sourceLabel}
+              </span>
+            </div>
+          )}
+
+          {isExternalProtectedForSupervisor && (
+            <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-900 text-amber-900 dark:text-amber-200 flex items-start gap-2">
+              <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>
+                هذا السجل مستورد مباشرة من النظام الخارجي. لتعديله بصفتك مشرف فريق، يرجى تقديم طلب تصحيح من صفحة "الطلبات" لاعتماده من مدير التشغيل.
+              </span>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1.5">
@@ -122,10 +160,11 @@ export const CellEditorModal: React.FC<CellEditorModalProps> = ({
               </label>
               <select
                 value={shiftSelection}
+                disabled={!canEditShiftSelection || isExternalProtectedForSupervisor}
                 onChange={(e) =>
                   setShiftSelection(e.target.value as ShiftSelectionStatus)
                 }
-                className="w-full border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-600 text-xs"
+                className="w-full border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-indigo-600 text-xs"
               >
                 <option value="selected">اختار الشفت</option>
                 <option value="not_selected">لم يختر</option>
@@ -140,10 +179,11 @@ export const CellEditorModal: React.FC<CellEditorModalProps> = ({
               </label>
               <select
                 value={attendance}
+                disabled={isExternalProtectedForSupervisor}
                 onChange={(e) =>
                   handleAttendanceChange(e.target.value as AttendanceStatus)
                 }
-                className="w-full border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-600 text-xs"
+                className="w-full border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-indigo-600 text-xs"
               >
                 <option value="worked">عمل بالفعل (حاضر)</option>
                 <option value="absent">غياب</option>
@@ -185,7 +225,7 @@ export const CellEditorModal: React.FC<CellEditorModalProps> = ({
                 />
               </div>
               <div>
-                <label className="text-slate-600 dark:text-slate-400 block mb-1">
+                <label className="text-slate-600 dark:text-slate-700 block mb-1">
                   نهاية العمل
                 </label>
                 <input
@@ -220,16 +260,17 @@ export const CellEditorModal: React.FC<CellEditorModalProps> = ({
             </label>
             <textarea
               value={supervisorNotes}
+              disabled={isExternalProtectedForSupervisor}
               onChange={(e) => setSupervisorNotes(e.target.value)}
               rows={2}
               placeholder="أي تفاصيل خاصة بتأخير، تبديل شفت، أو عذر مقبول..."
-              className="w-full border border-slate-300 dark:border-slate-700 rounded-lg p-2.5 text-xs bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-600"
+              className="w-full border border-slate-300 dark:border-slate-700 rounded-lg p-2.5 text-xs bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-indigo-600"
             />
           </div>
 
           <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-200 dark:border-slate-800">
             <div>
-              {record && (
+              {record && canDeleteRecord && (
                 <button
                   type="button"
                   onClick={() => onDelete(employee.id, date)}
@@ -248,13 +289,15 @@ export const CellEditorModal: React.FC<CellEditorModalProps> = ({
               >
                 إلغاء
               </button>
-              <button
-                type="submit"
-                className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap"
-              >
-                <Check className="w-4 h-4" />
-                حفظ السجل
-              </button>
+              {!isExternalProtectedForSupervisor && (
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap"
+                >
+                  <Check className="w-4 h-4" />
+                  حفظ السجل
+                </button>
+              )}
             </div>
           </div>
         </form>

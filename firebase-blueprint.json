@@ -1,0 +1,206 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Authorized user account with RBAC role, permissions, team scope, and employee linkage.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "email": { "type": "string", "minLength": 3, "maxLength": 180 },
+        "role": { "type": "string", "enum": ["super_admin", "operations_manager", "supervisor", "delivery_rep", "viewer"] },
+        "extraPermissions": { "type": "array", "description": "Bounded extra permissions (max 40)" },
+        "revokedPermissions": { "type": "array", "description": "Bounded revoked permissions (max 40)" },
+        "employeeId": { "type": "string", "maxLength": 128 },
+        "teamId": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["active", "disabled", "pending"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "lastLoginAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "name", "email", "role", "extraPermissions", "revokedPermissions", "employeeId", "teamId", "status", "createdAt", "updatedAt"]
+    },
+    "PreprovisionedAccount": {
+      "title": "PreprovisionedAccount",
+      "description": "Admin-created account invitation keyed by normalized email so new users cannot self-register without Super Admin approval.",
+      "type": "object",
+      "properties": {
+        "emailKey": { "type": "string", "minLength": 3, "maxLength": 180 },
+        "name": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "email": { "type": "string", "minLength": 3, "maxLength": 180 },
+        "role": { "type": "string", "enum": ["super_admin", "operations_manager", "supervisor", "delivery_rep", "viewer"] },
+        "extraPermissions": { "type": "array" },
+        "revokedPermissions": { "type": "array" },
+        "employeeId": { "type": "string", "maxLength": 128 },
+        "teamId": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["active", "disabled", "pending"] },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["emailKey", "name", "email", "role", "extraPermissions", "revokedPermissions", "employeeId", "teamId", "status", "createdBy", "createdAt", "updatedAt"]
+    },
+    "Team": {
+      "title": "Team",
+      "description": "Operational team linking a supervisor to assigned delivery representatives.",
+      "type": "object",
+      "properties": {
+        "teamId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "teamName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "supervisorId": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["active", "disabled"] },
+        "memberCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["teamId", "teamName", "supervisorId", "status", "memberCount", "createdAt", "updatedAt"]
+    },
+    "EmployeeRecord": {
+      "title": "EmployeeRecord",
+      "description": "Delivery representative master record compatible with existing Shift Tracker.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "employeeCode": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "fullName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "phone": { "type": "string", "maxLength": 32 },
+        "hireDate": { "type": "string", "maxLength": 20 },
+        "status": { "type": "string", "enum": ["active", "suspended"] },
+        "externalId": { "type": "string", "maxLength": 128 },
+        "teamId": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "notes": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "employeeCode", "fullName", "phone", "hireDate", "status", "externalId", "teamId", "userId", "notes", "createdAt", "updatedAt"]
+    },
+    "AttendanceDoc": {
+      "title": "AttendanceDoc",
+      "description": "Daily shift selection and attendance record scoped by employeeId and teamId.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "employeeId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "teamId": { "type": "string", "maxLength": 128 },
+        "date": { "type": "string", "minLength": 10, "maxLength": 10, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "shiftSelection": { "type": "string", "enum": ["selected", "not_selected", "undecided", "exempt"] },
+        "attendance": { "type": "string", "enum": ["worked", "absent", "leave", "day_off", "pending"] },
+        "startTime": { "type": "string", "maxLength": 10 },
+        "endTime": { "type": "string", "maxLength": 10 },
+        "breakMinutes": { "type": "number" },
+        "totalWorkedMinutes": { "type": "number" },
+        "supervisorNotes": { "type": "string", "maxLength": 500 },
+        "source": { "type": "string", "enum": ["manual", "external_sync", "approved_request"] },
+        "recordedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "employeeId", "teamId", "date", "shiftSelection", "attendance", "startTime", "endTime", "breakMinutes", "totalWorkedMinutes", "supervisorNotes", "source", "recordedBy", "createdAt", "updatedAt"]
+    },
+    "WorkflowRequest": {
+      "title": "WorkflowRequest",
+      "description": "Leave, absence dispute, attendance correction, or shift modification request.",
+      "type": "object",
+      "properties": {
+        "requestId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "employeeId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "employeeName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "teamId": { "type": "string", "maxLength": 128 },
+        "submittedBy": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "submitterRole": { "type": "string", "enum": ["super_admin", "operations_manager", "supervisor", "delivery_rep", "viewer"] },
+        "requestType": { "type": "string", "enum": ["leave", "absence_dispute", "attendance_correction", "checkout_correction", "shift_modification"] },
+        "requestDate": { "type": "string", "minLength": 10, "maxLength": 10, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "proposedStartTime": { "type": "string", "maxLength": 10 },
+        "proposedEndTime": { "type": "string", "maxLength": 10 },
+        "description": { "type": "string", "minLength": 3, "maxLength": 1000 },
+        "evidenceUrl": { "type": "string", "maxLength": 500 },
+        "status": { "type": "string", "enum": ["pending", "recommended", "approved", "rejected"] },
+        "supervisorRecommendation": { "type": "string", "maxLength": 500 },
+        "reviewedBy": { "type": "string", "maxLength": 128 },
+        "reviewerName": { "type": "string", "maxLength": 120 },
+        "reviewComment": { "type": "string", "maxLength": 500 },
+        "reviewedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["requestId", "employeeId", "employeeName", "teamId", "submittedBy", "submitterRole", "requestType", "requestDate", "proposedStartTime", "proposedEndTime", "description", "evidenceUrl", "status", "supervisorRecommendation", "reviewedBy", "reviewerName", "reviewComment", "createdAt", "updatedAt"]
+    },
+    "AuditLogEntry": {
+      "title": "AuditLogEntry",
+      "description": "Immutable security and operational audit log entry.",
+      "type": "object",
+      "properties": {
+        "logId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorUserId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "actorRole": { "type": "string", "enum": ["super_admin", "operations_manager", "supervisor", "delivery_rep", "viewer"] },
+        "category": { "type": "string", "enum": ["security", "operational"] },
+        "action": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "targetType": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "targetId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "beforeSummary": { "type": "string", "maxLength": 1000 },
+        "afterSummary": { "type": "string", "maxLength": 1000 },
+        "reason": { "type": "string", "maxLength": 500 },
+        "result": { "type": "string", "enum": ["success", "denied", "failure"] },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["logId", "actorUserId", "actorName", "actorRole", "category", "action", "targetType", "targetId", "beforeSummary", "afterSummary", "reason", "result", "timestamp"]
+    },
+    "SecurityPolicyConfig": {
+      "title": "SecurityPolicyConfig",
+      "description": "Non-secret RBAC and operational security settings managed strictly by Super Admin.",
+      "type": "object",
+      "properties": {
+        "policyId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "allowSupervisorLeaveRecommendation": { "type": "boolean" },
+        "allowViewerExport": { "type": "boolean" },
+        "allowOpsIntegrationSync": { "type": "boolean" },
+        "enforceAdminMfaNotice": { "type": "boolean" },
+        "sessionTimeoutMinutes": { "type": "number" },
+        "externalSyncEndpoint": { "type": "string", "maxLength": 300 },
+        "lastExternalSyncStatus": { "type": "string", "maxLength": 100 },
+        "lastExternalSyncImported": { "type": "number" },
+        "lastExternalSyncFailed": { "type": "number" },
+        "lastExternalSyncTime": { "type": "string", "maxLength": 64 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["policyId", "allowSupervisorLeaveRecommendation", "allowViewerExport", "allowOpsIntegrationSync", "enforceAdminMfaNotice", "sessionTimeoutMinutes", "externalSyncEndpoint", "lastExternalSyncStatus", "lastExternalSyncImported", "lastExternalSyncFailed", "lastExternalSyncTime", "updatedBy", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserAccount",
+      "description": "Authenticated user profiles with role, custom permission overrides, and scope."
+    },
+    "/preprovisionedUsers/{emailHash}": {
+      "schema": "PreprovisionedAccount",
+      "description": "Admin-approved invitations enabling closed onboarding without open registration."
+    },
+    "/teams/{teamId}": {
+      "schema": "Team",
+      "description": "Operational teams supervised by assigned supervisors."
+    },
+    "/employees/{employeeId}": {
+      "schema": "EmployeeRecord",
+      "description": "Delivery representative master records linked to teams and user accounts."
+    },
+    "/attendance/{recordId}": {
+      "schema": "AttendanceDoc",
+      "description": "Daily shift selection and attendance records."
+    },
+    "/requests/{requestId}": {
+      "schema": "WorkflowRequest",
+      "description": "Leave, dispute, and correction workflow requests."
+    },
+    "/auditLogs/{logId}": {
+      "schema": "AuditLogEntry",
+      "description": "Immutable audit trail of security and operational events."
+    },
+    "/securitySettings/{policyId}": {
+      "schema": "SecurityPolicyConfig",
+      "description": "Non-secret system security policies and external sync telemetry."
+    }
+  }
+}
